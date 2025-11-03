@@ -1,0 +1,43 @@
+{
+  "event_id": "E123",
+  "mode": "preference",
+  "preferences": {
+    "want_same_interests": true,
+    "want_different_major": false,
+    "preferred_genders": ["Male","Female"],
+    "min_age": 18,
+    "max_age": 30
+  },
+  "users": [
+    {
+      "user_id": "U1",
+      "age": 20,
+      "year_classification": "Junior",
+      "school": "SSE",
+      "program": "Bachelor of Science in Computer Systems",
+      "major": "CS",
+      "gender": "Male",
+      "interests": ["Gaming","Coding / Programming","Music"]
+    },
+    {
+      "user_id": "U2",
+      "age": 21,
+      "year_classification": "Junior",
+      "school": "SSE",
+      "program": "Bachelor of Science in Big Data Analytics",
+      "major": "Data Science",
+      "gender": "Female",
+      "interests": ["Gaming","Music","Reading"]
+    },
+    {
+      "user_id": "U3",
+      "age": 22,
+      "year_classification": "Senior",
+      "school": "SSE",
+      "program": "Bachelor of Science in Cloud and Mobile Software Engineering",
+      "major": "CS",
+      "gender": "Male",
+      "interests": ["Coding / Programming","Film & Movies","Music"]
+    }
+  ]
+}
