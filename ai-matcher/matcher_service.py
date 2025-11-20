@@ -23,6 +23,7 @@ class Student(BaseModel):
 class Preferences(BaseModel):
     want_same_interests: bool = False
     want_different_major: bool = False
+    # Choose the year preference options
     preferred_genders: Optional[List[str]] = None
     min_age: Optional[int] = None
     max_age: Optional[int] = None
