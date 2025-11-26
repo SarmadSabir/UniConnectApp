@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect } from "@react-navigation/native";
 import { fetchEvents, createEvent } from "../api/backend";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const formatDate = (value) => {
   if (!value) return "TBD";
@@ -24,6 +25,13 @@ export default function EventListScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem("userRole").then((role) => {
+      setIsAdmin(role === "admin");
+    });
+  }, []);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -98,17 +106,19 @@ export default function EventListScreen({ navigation }) {
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <View style={styles.headerRow}>
         <Text style={styles.screenTitle}>Events</Text>
-        <TouchableOpacity
-          style={[styles.createButton, creating && styles.disabledButton]}
-          onPress={handleCreateEvent}
-          disabled={creating}
-        >
-          {creating ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <Text style={styles.createButtonText}>Add Event</Text>
-          )}
-        </TouchableOpacity>
+        {isAdmin && (
+          <TouchableOpacity
+            style={[styles.createButton, creating && styles.disabledButton]}
+            onPress={handleCreateEvent}
+            disabled={creating}
+          >
+            {creating ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.createButtonText}>Add Event</Text>
+            )}
+          </TouchableOpacity>
+        )}
       </View>
       {loading ? (
         <ActivityIndicator style={{ marginTop: 40 }} size="large" color="#fff" />

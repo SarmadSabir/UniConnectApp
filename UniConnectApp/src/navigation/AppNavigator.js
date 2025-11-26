@@ -11,10 +11,15 @@ import GroupChatScreen from "../screens/GroupChatScreen";
 import LoginScreen from "../screens/LoginScreen";
 import SignupScreen from "../screens/SignupScreen";
 import ChatListScreen from "../screens/ChatListScreen";
+import AdminDashboardScreen from "../screens/AdminDashboardScreen";
+import AdminEventManagerScreen from "../screens/AdminEventManagerScreen";
+import AdminComplaintsScreen from "../screens/AdminComplaintsScreen";
+import ReportUserScreen from "../screens/ReportUserScreen";
 
 const RootStack = createStackNavigator();
 const EventStack = createStackNavigator();
 const ChatStack = createStackNavigator();
+const AdminStack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
 const navigationTheme = {
@@ -31,6 +36,8 @@ function EventsNavigator() {
       <EventStack.Screen name="EventDetails" component={EventDetailsScreen} />
       <EventStack.Screen name="MatchPreferences" component={MatchPreferencesScreen} />
       <EventStack.Screen name="EventList" component={EventListScreen} />
+      <EventStack.Screen name="GroupChat" component={GroupChatScreen} />
+      <EventStack.Screen name="ReportUser" component={ReportUserScreen} />
     </EventStack.Navigator>
   );
 }
@@ -39,7 +46,20 @@ function ChatsNavigator() {
   return (
     <ChatStack.Navigator screenOptions={{ headerShown: false }}>
       <ChatStack.Screen name="ChatList" component={ChatListScreen} />
+      <ChatStack.Screen name="ReportUser" component={ReportUserScreen} />
+      <ChatStack.Screen name="GroupChat" component={GroupChatScreen} />
     </ChatStack.Navigator>
+  );
+}
+
+function AdminNavigator() {
+  return (
+    <AdminStack.Navigator screenOptions={{ headerShown: false }}>
+      <AdminStack.Screen name="AdminDashboard" component={AdminDashboardScreen} />
+      <AdminStack.Screen name="AdminEvents" component={AdminEventManagerScreen} />
+      <AdminStack.Screen name="AdminComplaints" component={AdminComplaintsScreen} />
+      <AdminStack.Screen name="GroupChat" component={GroupChatScreen} />
+    </AdminStack.Navigator>
   );
 }
 
@@ -85,7 +105,7 @@ export default function AppNavigator() {
         <RootStack.Screen name="Login" component={LoginScreen} />
         <RootStack.Screen name="Signup" component={SignupScreen} />
         <RootStack.Screen name="Main" component={MainTabs} />
-        <RootStack.Screen name="GroupChat" component={GroupChatScreen} />
+        <RootStack.Screen name="Admin" component={AdminNavigator} />
       </RootStack.Navigator>
     </NavigationContainer>
   );

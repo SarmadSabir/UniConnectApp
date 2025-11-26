@@ -2,10 +2,9 @@ import express from "express";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
+import { getJwtSecret } from "../utils/jwt.js";
 
 const router = express.Router();
-const JWT_SECRET = "supersecret";
-
 router.post("/signup", async (req, res) => {
     try {
         const {
@@ -68,6 +67,16 @@ router.post("/signup", async (req, res) => {
 
         const password_hash = await bcrypt.hash(password, 10);
 
+        let role = "user";
+        const adminSecret = process.env.ADMIN_SIGNUP_SECRET || "";
+        if (
+            req.body?.admin_secret &&
+            adminSecret &&
+            req.body.admin_secret === adminSecret
+        ) {
+            role = "admin";
+        }
+
         const user = await User.create({
             name: cleanedName,
             university_email: cleanedEmail,
@@ -78,10 +87,11 @@ router.post("/signup", async (req, res) => {
             school: cleanedSchool,
             program: cleanedProgram,
             major: cleanedMajor,
-            interests: cleanedInterests
+            interests: cleanedInterests,
+            role,
         });
 
-        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
+        const token = jwt.sign({ id: user._id }, getJwtSecret(), { expiresIn: "7d" });
 
         res.json({ token, user });
     } catch (err) {
@@ -111,7 +121,7 @@ router.post("/login", async (req, res) => {
             return res.status(400).json({ error: "Invalid password" });
         }
 
-        const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: "7d" });
+        const token = jwt.sign({ id: user._id }, getJwtSecret(), { expiresIn: "7d" });
 
         res.json({ token, user });
 

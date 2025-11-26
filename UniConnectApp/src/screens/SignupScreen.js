@@ -301,11 +301,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "700",
-    color: "#10194E",
+    color: "#ffffff",
     marginBottom: 6,
   },
   subtitle: {
-    color: "#4E5876",
+    color: "#bfc2caff",
     marginBottom: 16,
     fontSize: 15,
   },

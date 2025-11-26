@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   View,
   Text,
@@ -12,7 +12,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   joinEvent,
-  runMatching,
   logout,
   getWaitStatus,
   fetchUserChats,
@@ -23,6 +22,43 @@ const defaultEvent = {
   id: "campus-creator-lab",
   name: "Campus Creator Lab",
   description: "Build prototypes with founders, designers, and researchers all weekend.",
+};
+
+const hasMeaningfulPreference = (prefs) => {
+  if (!prefs || typeof prefs !== "object") return false;
+  return Object.values(prefs).some((value) => {
+    if (typeof value === "boolean") return value;
+    if (Array.isArray(value)) return value.length > 0;
+    return value !== null && value !== undefined;
+  });
+};
+
+const sanitizePreferences = (prefs) => {
+  if (!prefs || typeof prefs !== "object") return null;
+  const clean = {};
+  Object.entries(prefs).forEach(([key, value]) => {
+    if (typeof value === "boolean") {
+      if (value) clean[key] = true;
+      return;
+    }
+    if (Array.isArray(value) && value.length) {
+      clean[key] = value;
+      return;
+    }
+    if (value !== null && value !== undefined) {
+      clean[key] = value;
+    }
+  });
+  return Object.keys(clean).length ? clean : null;
+};
+
+const slugify = (value) => {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 };
 
 const toEventKey = (value) => {
@@ -45,6 +81,30 @@ const normalizeId = (value) => {
   return "";
 };
 
+const collectEventKeys = (eventLike) => {
+  const keys = new Set();
+  const addKey = (value) => {
+    const key = toEventKey(value);
+    if (key) keys.add(key);
+  };
+  if (!eventLike) return [...keys];
+  if (typeof eventLike === "string") {
+    addKey(eventLike);
+    return [...keys];
+  }
+  addKey(eventLike.id);
+  addKey(eventLike._id);
+  addKey(eventLike.event_id);
+  addKey(eventLike.legacyId);
+  if (Array.isArray(eventLike.ids)) {
+    eventLike.ids.forEach(addKey);
+  }
+  const label = eventLike.name || eventLike.title;
+  const slug = slugify(label);
+  if (slug) keys.add(slug);
+  return [...keys];
+};
+
 export default function EventDetailsScreen({ route, navigation }) {
   const [eventDetails, setEventDetails] = useState(route.params?.event || defaultEvent);
   const [loading, setLoading] = useState(false);
@@ -54,15 +114,31 @@ export default function EventDetailsScreen({ route, navigation }) {
   const [hasJoined, setHasJoined] = useState(false);
   const [activeChat, setActiveChat] = useState(null);
   const [matchedForCurrentEvent, setMatchedForCurrentEvent] = useState(false);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState(
     "Tap Go Solo and we'll put you in the waitlist."
   );
+  const [matchPreferences, setMatchPreferences] = useState(
+    sanitizePreferences(route.params?.prefs)
+  );
 
   const currentEventId = eventDetails?.id || eventDetails?._id || defaultEvent.id;
-  const currentEventKey = toEventKey(currentEventId);
+  const currentEventKeys = useMemo(() => {
+    const payload = eventDetails ? { ...eventDetails } : { ...defaultEvent };
+    payload.id = payload.id || currentEventId;
+    const keys = collectEventKeys(payload);
+    return keys.length ? keys : collectEventKeys(defaultEvent);
+  }, [eventDetails, currentEventId]);
+  const currentEventKey = currentEventKeys[0] || "";
+  const currentEventKeysSignature = currentEventKeys.join("|");
   const currentEventName = eventDetails?.name || eventDetails?.title || "UniConnect Event";
   const currentEventDescription =
     eventDetails?.description || "Get matched with students who vibe with you.";
+  const latestEventKeyRef = useRef(currentEventKey);
+
+  useEffect(() => {
+    latestEventKeyRef.current = currentEventKey;
+  }, [currentEventKey]);
 
   useEffect(() => {
     AsyncStorage.multiGet(["userId", "userName"]).then((entries) => {
@@ -73,28 +149,92 @@ export default function EventDetailsScreen({ route, navigation }) {
   }, []);
 
   useEffect(() => {
-    if (route.params?.event) {
-      setEventDetails(route.params.event);
-    } else {
-      setEventDetails(defaultEvent);
+    if (route.params?.prefs === undefined) return;
+    setMatchPreferences(sanitizePreferences(route.params?.prefs));
+  }, [route.params?.prefs]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const hydrateEvent = async () => {
+      const newEvent = route.params?.event || defaultEvent;
+      setEventDetails(newEvent);
+      setActiveChat(null);
+      setHasJoined(false);
+      setStatusLoading(true);
+
+      const eventKeys = collectEventKeys(newEvent);
+      const previouslyMatched = await wasMatchedBefore(eventKeys);
+      if (cancelled) return;
+      setMatchedForCurrentEvent(Boolean(previouslyMatched));
+      setStatusMessage(
+        previouslyMatched
+          ? "You're matched! Head to the Chats tab to keep talking."
+          : "Tap Go Solo and we'll put you in the waitlist."
+      );
+      setStatusLoading(false);
+    };
+    hydrateEvent();
+    return () => {
+      cancelled = true;
+    };
+  }, [route.params?.event, wasMatchedBefore]);
+
+  useEffect(() => {
+    (async () => {
+      const wasMatched = await wasMatchedBefore(currentEventKeys);
+      if (wasMatched) {
+        setMatchedForCurrentEvent(true);
+        setStatusMessage("You're matched! Head to the Chats tab to keep talking.");
+        setStatusLoading(false);
+      }
+    })();
+  }, [currentEventKeysSignature, wasMatchedBefore]);
+
+  const rememberMatchedEvent = useCallback(async (eventKeys) => {
+    const keys = Array.isArray(eventKeys) ? eventKeys : [eventKeys];
+    const normalized = keys.map((value) => toEventKey(value)).filter(Boolean);
+    if (!normalized.length) return;
+    try {
+      const raw = await AsyncStorage.getItem("matchedEventIds");
+      const set = new Set(raw ? JSON.parse(raw) : []);
+      normalized.forEach((key) => set.add(key));
+      await AsyncStorage.setItem("matchedEventIds", JSON.stringify([...set]));
+    } catch (err) {
+      console.error("Failed to persist matched events", err);
     }
-    setActiveChat(null);
-    setHasJoined(false);
-    setStatusMessage("Tap Go Solo and we'll put you in the waitlist.");
-    setMatchedForCurrentEvent(false);
-  }, [route.params?.event]);
+  }, []);
+
+  const wasMatchedBefore = useCallback(async (eventKeys) => {
+    const keys = Array.isArray(eventKeys) ? eventKeys : [eventKeys];
+    const normalized = keys.map((value) => toEventKey(value)).filter(Boolean);
+    if (!normalized.length) return false;
+    try {
+      const raw = await AsyncStorage.getItem("matchedEventIds");
+      if (!raw) return false;
+      const list = JSON.parse(raw);
+      return Array.isArray(list) && normalized.some((key) => list.includes(key));
+    } catch (err) {
+      console.error("Failed to read matched events", err);
+      return false;
+    }
+  }, []);
 
   const refreshMembership = useCallback(async () => {
     if (!userId) return false;
+    const eventKey = currentEventKey;
+    const eventKeys = currentEventKeys;
+    const isFresh = () => eventKey === latestEventKeyRef.current;
     try {
+      setStatusLoading(true);
       const res = await fetchUserChats(userId);
+      if (!isFresh()) return false;
       let matchingGroup = null;
       let matched = false;
 
       if (res.groups && res.groups.length > 0) {
         res.groups.forEach((item) => {
           const eventId = toEventKey(item?.group?.event_id);
-          if (eventId && eventId === currentEventKey) {
+          if (eventId && eventKeys.includes(eventId)) {
             matched = true;
             if (!matchingGroup) {
               matchingGroup = item;
@@ -103,31 +243,51 @@ export default function EventDetailsScreen({ route, navigation }) {
         });
       }
 
+      if (!isFresh()) return false;
       setMatchedForCurrentEvent(matched);
 
       if (matchingGroup) {
+        if (!isFresh()) return false;
         setActiveChat(matchingGroup);
         setStatusMessage("You're matched! Head to the Chats tab to keep talking.");
         setHasJoined(false);
-        return true;
+        const backendKey = toEventKey(matchingGroup?.group?.event_id);
+        const keysToStore = backendKey ? [backendKey, ...eventKeys] : eventKeys;
+        await rememberMatchedEvent(keysToStore);
+        return matchingGroup;
       }
 
+      const previouslyMatched = await wasMatchedBefore(eventKeys);
+      if (!isFresh()) return false;
+      const anyMatch = matched || previouslyMatched;
+
       setActiveChat(null);
-      if (matched) {
+      setMatchedForCurrentEvent(anyMatch);
+      if (anyMatch) {
         setStatusMessage("You're matched! Head to the Chats tab to keep talking.");
       }
-      return matched;
+      return anyMatch;
     } catch (err) {
       console.error("Failed to load chats", err);
-      setMatchedForCurrentEvent(false);
+      const fallbackMatched = await wasMatchedBefore(eventKeys);
+      if (!isFresh()) return false;
+      setMatchedForCurrentEvent(fallbackMatched);
       return false;
+    } finally {
+      if (isFresh()) {
+        setStatusLoading(false);
+      }
     }
-  }, [userId, currentEventKey]);
+  }, [userId, currentEventKey, currentEventKeysSignature, rememberMatchedEvent, wasMatchedBefore]);
 
   const refreshWaitStatus = useCallback(async () => {
     if (!userId || !currentEventId) return;
+    const eventKey = currentEventKey;
+    const isFresh = () => eventKey === latestEventKeyRef.current;
     try {
+      setStatusLoading(true);
       const res = await getWaitStatus(currentEventId, userId);
+      if (!isFresh()) return;
       if (res.waiting) {
         setHasJoined(true);
         setStatusMessage("You're on the waitlist. We'll notify you when a group is ready.");
@@ -137,8 +297,12 @@ export default function EventDetailsScreen({ route, navigation }) {
       }
     } catch (err) {
       console.error("Failed to fetch wait status", err);
+    } finally {
+      if (isFresh()) {
+        setStatusLoading(false);
+      }
     }
-  }, [userId, currentEventId, activeChat, matchedForCurrentEvent]);
+  }, [userId, currentEventId, currentEventKey, activeChat, matchedForCurrentEvent]);
 
   useEffect(() => {
     if (!userId) return;
@@ -149,6 +313,14 @@ export default function EventDetailsScreen({ route, navigation }) {
       }
     })();
   }, [userId, refreshMembership, refreshWaitStatus]);
+
+  useEffect(() => {
+    const keyFromChat = toEventKey(activeChat?.group?.event_id);
+    if (activeChat && keyFromChat && currentEventKeys.includes(keyFromChat)) {
+      setMatchedForCurrentEvent(true);
+      rememberMatchedEvent([keyFromChat, ...currentEventKeys]);
+    }
+  }, [activeChat, currentEventKeysSignature, rememberMatchedEvent]);
 
   const navigateToChat = useCallback(
     (groupDoc) => {
@@ -164,33 +336,25 @@ export default function EventDetailsScreen({ route, navigation }) {
   const attemptMatch = useCallback(async () => {
     try {
       setMatching(true);
-      const res = await runMatching(currentEventId);
-      if (res.success && Array.isArray(res.groups) && res.groups.length > 0) {
-        const myGroup = res.groups.find((item) =>
-          item?.group?.members?.some((member) => normalizeId(member) === userId)
-        );
-        if (myGroup && myGroup.group && myGroup.chatroom) {
-          setStatusMessage("Match found! Opening your chat.");
-          navigateToChat(myGroup);
-        } else {
-          const msg = res.message || "Waiting for more users to join.";
-          setStatusMessage(msg);
-          Alert.alert("Hang tight", msg);
-        }
-      } else {
-        const msg = res.message || "Waiting for more users to join.";
-        setStatusMessage(msg);
-        Alert.alert("Hang tight", msg);
+      const matchResult = await refreshMembership();
+      if (matchResult && matchResult.group && matchResult.chatroom) {
+        setStatusMessage("Match found! Opening your chat.");
+        navigateToChat(matchResult);
+        return;
       }
+      await refreshWaitStatus();
+      setStatusMessage("Still collecting the best partners for you. Hang tight.");
+      Alert.alert(
+        "Still waiting",
+        "We're batching everyone and will notify you the moment a quality group is ready."
+      );
     } catch (err) {
-      console.error(err);
-      Alert.alert("Match error", "Unable to run matching right now.");
+      console.error("Match status error", err);
+      Alert.alert("Status error", "Unable to refresh match status right now.");
     } finally {
       setMatching(false);
-      await refreshMembership();
-      await refreshWaitStatus();
     }
-  }, [currentEventId, userId, navigateToChat, refreshMembership, refreshWaitStatus]);
+  }, [navigateToChat, refreshMembership, refreshWaitStatus]);
 
   const handleGoSolo = async () => {
     if (!userId) {
@@ -208,13 +372,13 @@ export default function EventDetailsScreen({ route, navigation }) {
 
     setLoading(true);
     try {
-    const response = await joinEvent(currentEventId, userId);
+      const response = await joinEvent(currentEventId, userId, matchPreferences);
       setHasJoined(true);
       setStatusMessage("You're on the waitlist. We'll notify you when a group is ready.");
       if (response?.alreadyQueued) {
         Alert.alert("You're already queued", "Sit tight while we find your partners.");
       } else {
-        await attemptMatch();
+        await refreshWaitStatus();
       }
     } catch (err) {
       console.error(err);
@@ -291,10 +455,17 @@ export default function EventDetailsScreen({ route, navigation }) {
           <TouchableOpacity
             style={[
               styles.primaryButton,
-              (loading || hasJoined || activeChat || matchedForCurrentEvent) && styles.disabledButton,
+              (loading ||
+                statusLoading ||
+                hasJoined ||
+                activeChat ||
+                matchedForCurrentEvent) &&
+                styles.disabledButton,
             ]}
             onPress={handleGoSolo}
-            disabled={Boolean(loading || hasJoined || activeChat || matchedForCurrentEvent)}
+            disabled={Boolean(
+              loading || statusLoading || hasJoined || activeChat || matchedForCurrentEvent
+            )}
           >
             {loading ? (
               <ActivityIndicator color="#fff" />
@@ -328,7 +499,12 @@ export default function EventDetailsScreen({ route, navigation }) {
 
           <TouchableOpacity
             style={styles.linkButton}
-            onPress={() => navigation.navigate("MatchPreferences", { event: eventDetails })}
+            onPress={() =>
+              navigation.navigate("MatchPreferences", {
+                event: eventDetails,
+                prefs: matchPreferences,
+              })
+            }
           >
             <Text style={styles.linkButtonText}>Choose match type</Text>
           </TouchableOpacity>

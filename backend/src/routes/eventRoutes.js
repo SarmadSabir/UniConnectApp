@@ -1,10 +1,37 @@
 import express from "express";
 import Event from "../models/Event.js";
-import EventQueue from "../models/EventQueue.js";
-import User from "../models/User.js";
-import Group from "../models/Group.js";
-import ChatRoom from "../models/ChatRoom.js";
-import { getGroupsFromAI } from "../services/aiService.js";
+import Waitlist from "../models/Waitlist.js";
+import { requireAdmin } from "../middleware/auth.js";
+import { normalizeEventId } from "../utils/eventIds.js";
+import { processEventForMatching } from "../services/batchMatchingWorker.js";
+
+const hasPreferenceValue = (value) => {
+    if (typeof value === "boolean") return value;
+    if (Array.isArray(value)) return value.length > 0;
+    if (value === null || value === undefined) return false;
+    if (typeof value === "number") return !Number.isNaN(value);
+    if (typeof value === "string") return value.trim().length > 0;
+    if (typeof value === "object") return Object.keys(value).length > 0;
+    return Boolean(value);
+};
+
+const normalizePreferencesPayload = (prefs) => {
+    if (!prefs || typeof prefs !== "object") return null;
+    const clean = {};
+    Object.entries(prefs).forEach(([key, value]) => {
+        if (!hasPreferenceValue(value)) return;
+        if (typeof value === "boolean") {
+            if (value) clean[key] = true;
+            return;
+        }
+        if (Array.isArray(value)) {
+            if (value.length) clean[key] = value;
+            return;
+        }
+        clean[key] = value;
+    });
+    return Object.keys(clean).length ? clean : null;
+};
 
 const router = express.Router();
 
@@ -41,7 +68,7 @@ router.get("/", async (_req, res) => {
 /**
  * CREATE EVENT
  */
-router.post("/", async (req, res) => {
+router.post("/", requireAdmin, async (req, res) => {
     try {
         const { title, description, date } = req.body;
         if (!title) {
@@ -68,12 +95,14 @@ router.post("/:id/join", async (req, res) => {
     try {
         const { id } = req.params;
         const { user_id, preferences } = req.body;
+        const eventKey = normalizeEventId(id);
+        const normalizedPreferences = normalizePreferencesPayload(preferences);
 
         if (!user_id) {
             return res.status(400).json({ success: false, message: "user_id is required" });
         }
 
-        const existing = await EventQueue.findOne({ event_id: id, user_id });
+        const existing = await Waitlist.findOne({ event_id: eventKey, user_id });
         if (existing) {
             return res.json({
                 success: true,
@@ -82,11 +111,10 @@ router.post("/:id/join", async (req, res) => {
             });
         }
 
-        await EventQueue.create({
-            event_id: id,
+        await Waitlist.create({
+            event_id: eventKey,
             user_id,
-            preferences,
-            status: "waiting"
+            preferences: normalizedPreferences,
         });
 
         res.json({ success: true, queued: true, message: "User added to waitlist" });
@@ -109,7 +137,8 @@ router.post("/:id/join", async (req, res) => {
 router.get("/:id/wait-status/:userId", async (req, res) => {
     try {
         const { id, userId } = req.params;
-        const existing = await EventQueue.findOne({ event_id: id, user_id: userId, status: "waiting" });
+        const eventKey = normalizeEventId(id);
+        const existing = await Waitlist.findOne({ event_id: eventKey, user_id: userId });
         res.json({ success: true, waiting: Boolean(existing) });
     } catch (err) {
         console.error("Status check error:", err);
@@ -123,78 +152,26 @@ router.get("/:id/wait-status/:userId", async (req, res) => {
 router.post("/:id/run-matching", async (req, res) => {
     try {
         const { id } = req.params;
+        const forceProcess = Boolean(req.query?.force || req.body?.force);
+        const result = await processEventForMatching(id, { forceProcess });
 
-        // 1. Fetch waitlisted users
-        const queue = await EventQueue.find({ event_id: id, status: "waiting" })
-            .populate("user_id");
-
-        if (queue.length < 3) {
+        if (!result.triggered) {
             return res.json({
                 success: false,
-                message: "Not enough users yet"
+                message: result.message || "No match created yet",
+                queueSize: result.queueSize || 0,
             });
         }
-
-        // 2. Convert users → AI format
-        const usersForAI = queue.map(q => ({
-            user_id: q.user_id._id.toString(),
-            age: q.user_id.age,
-            year_classification: q.user_id.year_classification,
-            school: q.user_id.school,
-            program: q.user_id.program,
-            major: q.user_id.major,
-            gender: q.user_id.gender,
-            interests: q.user_id.interests,
-        }));
-
-        // 3. Get AI groups
-        const aiResponse = await getGroupsFromAI(id, "auto", {}, usersForAI);
-        const { groups } = aiResponse;
-
-        if (!groups || groups.length === 0) {
-            return res.json({ success: false, message: "AI returned no groups" });
-        }
-
-        // 4. Create Group + ChatRoom for each result
-        const output = [];
-
-        for (let g of groups) {
-            // Create Group in DB
-            const groupDoc = await Group.create({
-                event_id: id,
-                members: g.members,
-                score: g.score || null,
-                reasons: g.reasons || []
-            });
-
-            // Create ChatRoom in DB
-            const chatroom = await ChatRoom.create({
-                group_id: groupDoc._id,
-                messages: []
-            });
-
-            await groupDoc.populate({
-                path: "members",
-                select: "name university_email"
-            });
-
-            output.push({
-                group: groupDoc,
-                chatroom: chatroom
-            });
-        }
-
-        // 5. Remove matched from waitlist
-        const matched = groups.flatMap(g => g.members);
-        await EventQueue.deleteMany({
-            event_id: id,
-            user_id: { $in: matched }
-        });
 
         res.json({
             success: true,
-            message: "Groups formed successfully",
-            groups: output
+            message: result.message || "Group formed successfully",
+            groups: [
+                {
+                    group: result.group,
+                    chatroom: result.chatroom,
+                },
+            ],
         });
 
     } catch (err) {
@@ -204,3 +181,4 @@ router.post("/:id/run-matching", async (req, res) => {
 });
 
 export default router;
+

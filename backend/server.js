@@ -11,6 +11,9 @@ import authRoutes from "./src/routes/auth.js";
 import eventRoutes from "./src/routes/eventRoutes.js";
 import chatRoutes from "./src/routes/chatRoutes.js";
 import groupRoutes from "./src/routes/groupRoutes.js";
+import complaintRoutes from "./src/routes/complaintRoutes.js";
+import adminRoutes from "./src/routes/adminRoutes.js";
+import { startBatchMatchingWorker } from "./src/services/batchMatchingWorker.js";
 
 const app = express();
 app.use(cors({ origin: "*" }));
@@ -20,6 +23,8 @@ app.use("/api/auth", authRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/chat", chatRoutes);
 app.use("/api/groups", groupRoutes);
+app.use("/api/complaints", complaintRoutes);
+app.use("/api/admin", adminRoutes);
 
 // ----------------------
 // MONGODB CONNECTION
@@ -28,7 +33,10 @@ mongoose.connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
 })
-.then(() => console.log("MongoDB Connected"))
+.then(() => {
+    console.log("MongoDB Connected");
+    startBatchMatchingWorker(console);
+})
 .catch(err => console.log("DB Error:", err));
 
 

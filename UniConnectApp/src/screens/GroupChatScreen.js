@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   SafeAreaView,
   View,
@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { getChatroom, sendMessage } from "../api/chat";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -55,7 +56,7 @@ const ChatBubble = ({ item, isMine }) => (
   </View>
 );
 
-export default function GroupChatScreen({ route }) {
+export default function GroupChatScreen({ route, navigation }) {
   const { groupId, chatroomId, members = [] } = route.params;
 
   const [messages, setMessages] = useState([]);
@@ -63,6 +64,14 @@ export default function GroupChatScreen({ route }) {
   const [userId, setUserId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+
+  const memberLookup = useMemo(() => {
+    return members.reduce((acc, member) => {
+      const id = toIdString(member);
+      if (id) acc[id] = member;
+      return acc;
+    }, {});
+  }, [members]);
 
   useEffect(() => {
     AsyncStorage.getItem("userId").then((id) => setUserId(id));
@@ -106,6 +115,32 @@ export default function GroupChatScreen({ route }) {
     }
   };
 
+  const handleReportMessage = (message) => {
+    const senderId = toIdString(message.sender);
+    const memberInfo = memberLookup[senderId] || {};
+    const reportedEmail = memberInfo.university_email || "";
+    const reportedName = memberInfo.name || formatMemberLabel(memberInfo || senderId);
+
+    Alert.alert(
+      "Report this message?",
+      "We'll send this to the admins to review.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Report",
+          style: "destructive",
+          onPress: () =>
+            navigation.navigate("ReportUser", {
+              reportedEmail,
+              reportedName,
+              contextMessage: message.text,
+            }),
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
@@ -143,8 +178,15 @@ export default function GroupChatScreen({ route }) {
               contentContainerStyle={styles.chatContent}
               renderItem={({ item }) => {
                 const senderId = toIdString(item.sender);
+                const isMine = Boolean(userId) && senderId === userId;
                 return (
-                  <ChatBubble item={item} isMine={Boolean(userId) && senderId === userId} />
+                  <TouchableOpacity
+                    activeOpacity={0.9}
+                    delayLongPress={350}
+                    onLongPress={() => handleReportMessage(item)}
+                  >
+                    <ChatBubble item={item} isMine={isMine} />
+                  </TouchableOpacity>
                 );
               }}
             />

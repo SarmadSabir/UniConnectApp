@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_URL = "http://192.168.0.104:4000";
+const API_URL = "http://192.168.18.173:4000";
 
 export async function getChatroom(chatroomId) {
   const res = await axios.get(`${API_URL}/api/chat/${chatroomId}`);

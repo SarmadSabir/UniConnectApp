@@ -104,6 +104,12 @@ export default function ChatListScreen() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
+      <View style={styles.headerRow}>
+        <Text style={styles.screenTitle}>Chats</Text>
+        <TouchableOpacity style={styles.reportButton} onPress={() => navigation.navigate("ReportUser")}>
+          <Text style={styles.reportButtonText}>Report</Text>
+        </TouchableOpacity>
+      </View>
       {loading ? (
         <ActivityIndicator style={{ marginTop: 40 }} size="large" color="#5B67F1" />
       ) : chats.length === 0 ? (
@@ -135,6 +141,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 16,
     paddingTop: Platform.OS === "android" ? 24 : 8,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  screenTitle: {
+    color: "#F5F7FF",
+    fontSize: 24,
+    fontWeight: "700",
+  },
+  reportButton: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.5)",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  reportButtonText: {
+    color: "#fff",
+    fontWeight: "600",
   },
   listContent: {
     paddingBottom: 80,

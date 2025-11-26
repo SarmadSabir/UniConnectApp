@@ -26,7 +26,11 @@ export default function LoginScreen({ navigation }) {
       setLoading(true);
       const user = await login({ university_email: email.trim(), password });
       alert("Welcome back " + user.name);
-      navigation.replace("Main");
+      if (user.role === "admin") {
+        navigation.replace("Admin");
+      } else {
+        navigation.replace("Main");
+      }
     } catch (err) {
       console.error(err);
       alert("Login failed: " + (err.response?.data?.error || "Server error"));
@@ -105,13 +109,13 @@ const styles = StyleSheet.create({
   heroTitle: {
     fontSize: 32,
     fontWeight: "700",
-    color: "#10194E",
+    color: "#ffffff",
     textAlign: "center",
     marginBottom: 12,
   },
   subtitle: {
     textAlign: "center",
-    color: "#4E5876",
+    color: "#bfc2caff",
     marginBottom: 28,
     fontSize: 16,
     paddingHorizontal: 16,
