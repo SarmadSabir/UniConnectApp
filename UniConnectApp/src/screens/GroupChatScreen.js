@@ -26,19 +26,50 @@ const toIdString = (value) => {
   return "";
 };
 
-const formatMemberLabel = (value = "") => {
-  if (typeof value === "object" && value?.name) {
-    return value.name;
+const extractMemberName = (value = "") => {
+  if (typeof value === "object") {
+    if (value?.name) return value.name;
+    if (value?.university_email) return value.university_email.split("@")[0];
   }
+  if (typeof value === "string") return value;
+  return "";
+};
+
+const toFallbackHandle = (value = "") => {
   const str = toIdString(value);
   if (!str) return "";
   return `#${str.slice(-4)}`;
+};
+
+const formatMemberLabel = (value = "") => {
+  const name = extractMemberName(value);
+  if (name) return name;
+  return toFallbackHandle(value);
 };
 
 const getMemberKey = (value, index) => {
   const str = toIdString(value);
   if (str) return str;
   return `member-${index}`;
+};
+
+const buildGroupTitle = (members = [], fallbackId) => {
+  const names = members
+    .map((member) => extractMemberName(member)?.trim())
+    .filter(Boolean)
+    .map((name) => name.split(" ")[0])
+    .filter(Boolean);
+  if (!names.length) {
+    const fallback = toFallbackHandle(fallbackId);
+    return fallback ? `Room ${fallback}` : "Group Chat";
+  }
+  if (names.length === 1) {
+    return `${names[0]}'s Crew`;
+  }
+  if (names.length === 2) {
+    return `${names[0]} & ${names[1]}`;
+  }
+  return `${names[0]}, ${names[1]} +${names.length - 2}`;
 };
 
 const ChatBubble = ({ item, isMine }) => (
@@ -72,6 +103,8 @@ export default function GroupChatScreen({ route, navigation }) {
       return acc;
     }, {});
   }, [members]);
+
+  const groupTitle = useMemo(() => buildGroupTitle(members, groupId), [members, groupId]);
 
   useEffect(() => {
     AsyncStorage.getItem("userId").then((id) => setUserId(id));
@@ -150,9 +183,9 @@ export default function GroupChatScreen({ route, navigation }) {
       >
         <View style={styles.header}>
           <View>
-            <Text style={styles.headerTitle}>Group Chat</Text>
+            <Text style={styles.headerTitle}>{groupTitle}</Text>
             <Text style={styles.headerSubtitle}>
-              Room {formatMemberLabel(groupId)} | {members.length} members
+              Group chat · {members.length} {members.length === 1 ? "member" : "members"}
             </Text>
           </View>
         </View>
