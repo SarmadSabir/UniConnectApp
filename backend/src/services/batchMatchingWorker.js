@@ -7,7 +7,7 @@ import { normalizeEventId } from "../utils/eventIds.js";
 
 const MIN_TRIPLET_SIZE = 3;
 const DEFAULT_TRIGGER_SIZE = Number(process.env.MATCH_TRIGGER_BATCH_SIZE || 6);
-const DEFAULT_MAX_WAIT_MS = Number(process.env.MATCH_MAX_WAIT_MS || 30000);
+const DEFAULT_MAX_WAIT_MS = Number(process.env.MATCH_MAX_WAIT_MS || 60000);
 const DEFAULT_POLL_INTERVAL_MS = Number(process.env.MATCH_POLL_INTERVAL_MS || 5000);
 
 const processingEvents = new Set();
@@ -21,15 +21,128 @@ const toObjectId = (value) => {
   }
 };
 
-const selectBestTriplet = (groups = []) => {
-  return groups
-    .filter((g) => Array.isArray(g.members) && g.members.length === 3)
-    .reduce((best, current) => {
-      const currentScore =
-        typeof current.score === "number" ? current.score : Number.NEGATIVE_INFINITY;
-      const bestScore = typeof best?.score === "number" ? best.score : Number.NEGATIVE_INFINITY;
-      return currentScore > bestScore ? current : best;
-    }, null);
+const HARD_PREF_KEYS = ["preferred_year_classifications"];
+const SOFT_PREF_KEYS = [
+  "want_same_interests",
+  "want_different_major",
+  "want_same_major",
+  "want_same_gender",
+];
+
+const normalizeArrayPreference = (value = []) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : entry))
+    .filter((entry) => entry !== null && entry !== undefined && entry !== "");
+};
+
+const buildPreferenceMeta = (prefs = {}) => {
+  if (!prefs || typeof prefs !== "object") {
+    return {
+      hard: { has: false, years: [] },
+      soft: { has: false },
+    };
+  }
+  const hardYears = normalizeArrayPreference(prefs.preferred_year_classifications);
+  const hasSoft = SOFT_PREF_KEYS.some((key) => Boolean(prefs[key]));
+  return {
+    hard: {
+      has: hardYears.length > 0,
+      years: hardYears,
+    },
+    soft: {
+      has: hasSoft,
+    },
+  };
+};
+
+const meetsHardPreferences = (entryMeta, candidateProfile) => {
+  if (!entryMeta?.hard?.has) return true;
+  if (!candidateProfile) return false;
+  const candidateYear = candidateProfile.year_classification;
+  if (!candidateYear) return false;
+  return entryMeta.hard.years.includes(candidateYear);
+};
+
+const partitionEligibleQueue = (queue) => {
+  if (!queue.length) {
+    return { eligible: [], deferred: [] };
+  }
+  const deferredIds = new Set();
+  let changed = true;
+
+  const getCandidateSet = (entry) =>
+    queue.filter(
+      (candidate) =>
+        candidate !== entry &&
+        !deferredIds.has(candidate._id.toString()) &&
+        candidate.user_id &&
+        meetsHardPreferences(entry.preferenceMeta, candidate.user_id)
+    );
+
+  while (changed) {
+    changed = false;
+    queue.forEach((entry) => {
+      if (deferredIds.has(entry._id.toString())) return;
+      if (!entry.preferenceMeta?.hard?.has) return;
+      const compatible = getCandidateSet(entry);
+      if (compatible.length < MIN_TRIPLET_SIZE - 1) {
+        deferredIds.add(entry._id.toString());
+        changed = true;
+      }
+    });
+  }
+
+  const eligible = queue.filter((entry) => !deferredIds.has(entry._id.toString()));
+  const deferred = queue.filter((entry) => deferredIds.has(entry._id.toString()));
+  return { eligible, deferred };
+};
+
+const summarizePreferences = (queue) => {
+  let hasHard = false;
+  let hasSoft = false;
+  queue.forEach((entry) => {
+    if (entry.preferenceMeta?.hard?.has) {
+      hasHard = true;
+    }
+    if (entry.preferenceMeta?.soft?.has) {
+      hasSoft = true;
+    }
+  });
+  const mode = hasHard || hasSoft ? "preference" : "auto";
+  return {
+    mode,
+    summary: {
+      version: 2,
+      has_hard: hasHard,
+      has_soft: hasSoft,
+    },
+  };
+};
+
+const selectBestTriplet = (groups = [], entryLookup) => {
+  let best = null;
+  groups.forEach((group) => {
+    if (!Array.isArray(group.members) || group.members.length !== MIN_TRIPLET_SIZE) return;
+    const respectsConstraints = group.members.every((memberId, index) => {
+      const entry = entryLookup.get(memberId.toString());
+      if (!entry) return false;
+      const partners = group.members
+        .filter((_, idx) => idx !== index)
+        .map((partnerId) => entryLookup.get(partnerId.toString()))
+        .filter(Boolean);
+      if (partners.length !== MIN_TRIPLET_SIZE - 1) return false;
+      return partners.every((partner) =>
+        meetsHardPreferences(entry.preferenceMeta, partner.user_id)
+      );
+    });
+    if (!respectsConstraints) return;
+    const score = typeof group.score === "number" ? group.score : Number.NEGATIVE_INFINITY;
+    if (!best || score > (typeof best.score === "number" ? best.score : Number.NEGATIVE_INFINITY)) {
+      best = group;
+    }
+  });
+  return best;
 };
 
 const shouldTrigger = (queue, { triggerSize, maxWaitMs, forceProcess }) => {
@@ -50,47 +163,6 @@ const shouldTrigger = (queue, { triggerSize, maxWaitMs, forceProcess }) => {
   return { shouldRun: false, reason: "Still collecting users for quality match" };
 };
 
-const mergePreferenceArrays = (existing = [], incoming = []) => {
-  const merged = new Set(existing);
-  incoming.forEach((value) => {
-    if (value === null || value === undefined) return;
-    const normalized = typeof value === "string" ? value.trim() : value;
-    if (normalized === "" || normalized === undefined || normalized === null) return;
-    merged.add(normalized);
-  });
-  return [...merged];
-};
-
-const aggregatePreferencesForQueue = (queue) => {
-  const merged = {};
-  let hasAny = false;
-  queue.forEach((entry) => {
-    const prefs = entry.preferences;
-    if (!prefs || typeof prefs !== "object") return;
-    Object.entries(prefs).forEach(([key, value]) => {
-      if (typeof value === "boolean") {
-        if (value) {
-          merged[key] = true;
-          hasAny = true;
-        }
-        return;
-      }
-      if (Array.isArray(value)) {
-        if (!value.length) return;
-        merged[key] = mergePreferenceArrays(merged[key], value);
-        if (merged[key].length) {
-          hasAny = true;
-        }
-        return;
-      }
-      if (value === null || value === undefined) return;
-      merged[key] = value;
-      hasAny = true;
-    });
-  });
-  return hasAny ? merged : null;
-};
-
 const buildAiPayload = (queue) =>
   queue.map((entry) => {
     const profile = entry.user_id;
@@ -103,6 +175,8 @@ const buildAiPayload = (queue) =>
       major: profile.major,
       gender: profile.gender,
       interests: Array.isArray(profile.interests) ? profile.interests : [],
+      preferences: entry.preferences || null,
+      joined_at: entry.joined_at,
     };
   });
 
@@ -150,12 +224,27 @@ export async function processEventForMatching(rawEventId, options = {}) {
       await Waitlist.deleteMany({ _id: { $in: missing.map((entry) => entry._id) } });
     }
     const queue = waitlist.filter((entry) => entry.user_id);
+    queue.forEach((entry) => {
+      entry.preferenceMeta = buildPreferenceMeta(entry.preferences);
+    });
 
     if (!queue.length) {
       return { triggered: false, message: "No users waiting", queueSize: 0 };
     }
 
-    const trigger = shouldTrigger(queue, {
+    const { eligible: eligibleQueue } = partitionEligibleQueue(queue);
+
+    if (!eligibleQueue.length) {
+      return {
+        triggered: false,
+        message: "Waiting for compatible matches",
+        queueSize: queue.length,
+        eligibleSize: 0,
+        eventId: eventIdLabel,
+      };
+    }
+
+    const trigger = shouldTrigger(eligibleQueue, {
       triggerSize,
       maxWaitMs,
       forceProcess: Boolean(options.forceProcess),
@@ -166,37 +255,46 @@ export async function processEventForMatching(rawEventId, options = {}) {
         triggered: false,
         message: trigger.reason,
         queueSize: queue.length,
+        eligibleSize: eligibleQueue.length,
         eventId: eventIdLabel,
       };
     }
 
-    const aiUsers = buildAiPayload(queue);
-    const aggregatedPreferences = aggregatePreferencesForQueue(queue);
-    const mode = aggregatedPreferences ? "preference" : "auto";
+    const aiUsers = buildAiPayload(eligibleQueue);
+    const preferenceSummary = summarizePreferences(eligibleQueue);
+    const entryLookup = new Map();
+    eligibleQueue.forEach((entry) => {
+      entryLookup.set(entry.user_id._id.toString(), entry);
+    });
+
     const aiResponse = await getGroupsFromAI(
       eventIdLabel,
-      mode,
-      aggregatedPreferences || null,
+      preferenceSummary.mode,
+      preferenceSummary.summary,
       aiUsers
     );
-    const bestTriplet = selectBestTriplet(aiResponse?.groups || []);
+    const bestTriplet = selectBestTriplet(aiResponse?.groups || [], entryLookup);
 
     if (!bestTriplet) {
       return {
         triggered: false,
         message: "AI did not return a valid triplet",
         queueSize: queue.length,
+        eligibleSize: eligibleQueue.length,
         eventId: eventIdLabel,
       };
     }
 
     const memberIds = bestTriplet.members.map((id) => id.toString());
-    const membersInQueue = queue.filter((entry) => memberIds.includes(entry.user_id._id.toString()));
+    const membersInQueue = eligibleQueue.filter((entry) =>
+      memberIds.includes(entry.user_id._id.toString())
+    );
     if (membersInQueue.length !== MIN_TRIPLET_SIZE) {
       return {
         triggered: false,
         message: "Triplet references users no longer waiting",
         queueSize: queue.length,
+        eligibleSize: eligibleQueue.length,
         eventId: eventIdLabel,
       };
     }
@@ -207,6 +305,7 @@ export async function processEventForMatching(rawEventId, options = {}) {
         triggered: false,
         message: "Failed to convert member ids",
         queueSize: queue.length,
+        eligibleSize: eligibleQueue.length,
         eventId: eventIdLabel,
       };
     }
@@ -238,6 +337,7 @@ export async function processEventForMatching(rawEventId, options = {}) {
       message: trigger.reason,
       eventId: eventIdLabel,
       queueSize: queue.length,
+      eligibleSize: eligibleQueue.length,
       score: groupDoc.score,
       group: groupDoc,
       chatroom,

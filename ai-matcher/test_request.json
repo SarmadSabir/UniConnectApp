@@ -4,6 +4,9 @@
   "preferences": {
     "want_same_interests": true,
     "want_different_major": false,
+    "want_same_major": true,
+    "want_same_gender": true,
+    "preferred_year_classifications": ["Junior","Senior"],
     "preferred_genders": ["Male","Female"],
     "min_age": 18,
     "max_age": 30
@@ -17,7 +20,11 @@
       "program": "Bachelor of Science in Computer Systems",
       "major": "CS",
       "gender": "Male",
-      "interests": ["Gaming","Coding / Programming","Music"]
+      "interests": ["Gaming","Coding / Programming","Music"],
+      "preferences": {
+        "want_same_interests": true,
+        "preferred_year_classifications": ["Junior","Senior"]
+      }
     },
     {
       "user_id": "U2",
@@ -27,7 +34,12 @@
       "program": "Bachelor of Science in Big Data Analytics",
       "major": "Data Science",
       "gender": "Female",
-      "interests": ["Gaming","Music","Reading"]
+      "interests": ["Gaming","Music","Reading"],
+      "preferences": {
+        "want_same_interests": true,
+        "want_different_major": true,
+        "preferred_year_classifications": ["Junior","Senior"]
+      }
     },
     {
       "user_id": "U3",
@@ -37,7 +49,11 @@
       "program": "Bachelor of Science in Cloud and Mobile Software Engineering",
       "major": "CS",
       "gender": "Male",
-      "interests": ["Coding / Programming","Film & Movies","Music"]
+      "interests": ["Coding / Programming","Film & Movies","Music"],
+      "preferences": {
+        "want_same_gender": true,
+        "preferred_year_classifications": ["Senior"]
+      }
     }
   ]
 }

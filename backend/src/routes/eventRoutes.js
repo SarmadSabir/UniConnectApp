@@ -5,6 +5,8 @@ import { requireAdmin } from "../middleware/auth.js";
 import { normalizeEventId } from "../utils/eventIds.js";
 import { processEventForMatching } from "../services/batchMatchingWorker.js";
 
+const YEAR_CLASSIFICATIONS = ["Freshman", "Sophomore", "Junior", "Senior", "Graduate"];
+
 const hasPreferenceValue = (value) => {
     if (typeof value === "boolean") return value;
     if (Array.isArray(value)) return value.length > 0;
@@ -25,7 +27,18 @@ const normalizePreferencesPayload = (prefs) => {
             return;
         }
         if (Array.isArray(value)) {
-            if (value.length) clean[key] = value;
+            let arr = value.map((entry) => {
+                if (typeof entry === "string") return entry.trim();
+                return entry;
+            });
+            if (key === "preferred_year_classifications") {
+                arr = arr
+                    .filter((entry) => typeof entry === "string" && YEAR_CLASSIFICATIONS.includes(entry))
+                    .filter((entry, index, src) => src.indexOf(entry) === index);
+            } else {
+                arr = arr.filter((entry) => entry !== null && entry !== undefined && `${entry}`.trim().length > 0);
+            }
+            if (arr.length) clean[key] = arr;
             return;
         }
         clean[key] = value;

@@ -19,12 +19,53 @@ const defaultEvent = {
 const defaultPreferences = {
   want_same_interests: false,
   want_different_major: false,
+  want_same_major: false,
+  want_same_gender: false,
+  preferred_year_classifications: [],
 };
 
-const buildPreferenceState = (incoming) => ({
-  ...defaultPreferences,
-  ...(incoming || {}),
-});
+const buildPreferenceState = (incoming) => {
+  const merged = {
+    ...defaultPreferences,
+    ...(incoming || {}),
+  };
+  merged.preferred_year_classifications = Array.isArray(
+    merged.preferred_year_classifications
+  )
+    ? merged.preferred_year_classifications.filter(Boolean)
+    : merged.preferred_year_classifications
+    ? [merged.preferred_year_classifications].filter(Boolean)
+    : [];
+  return merged;
+};
+
+const hasMeaningfulPreferenceValue = (value) => {
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.length > 0;
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return !Number.isNaN(value);
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+};
+
+const normalizePreferencePayload = (prefs) => {
+  if (!prefs || typeof prefs !== "object") return null;
+  const clean = {};
+  Object.entries(prefs).forEach(([key, value]) => {
+    if (!hasMeaningfulPreferenceValue(value)) return;
+    if (Array.isArray(value)) {
+      clean[key] = value.filter(Boolean);
+      return;
+    }
+    if (typeof value === "boolean") {
+      if (value) clean[key] = true;
+      return;
+    }
+    clean[key] = value;
+  });
+  return Object.keys(clean).length ? clean : null;
+};
 
 const preferenceOptions = [
   {
@@ -38,13 +79,30 @@ const preferenceOptions = [
     label: "Match with different majors",
     description: "Mix disciplines to spark fresh ideas and unexpected collabs.",
     icon: "git-branch-outline",
+    exclusiveWith: ["want_same_major"],
+  },
+  {
+    key: "want_same_major",
+    label: "Match with same major",
+    description: "Pair up with classmates solving the same course load.",
+    icon: "ribbon-outline",
+    exclusiveWith: ["want_different_major"],
+  },
+  {
+    key: "want_same_gender",
+    label: "Match with same gender",
+    description: "Opt-in if you collaborate best with peers who share your gender identity.",
+    icon: "people-outline",
   },
 ];
+
+const yearOptions = ["Freshman", "Sophomore", "Junior", "Senior", "Graduate"];
 
 export default function MatchPreferencesScreen({ route, navigation }) {
   const event = route?.params?.event || defaultEvent;
   const initialPrefs = useMemo(() => buildPreferenceState(route?.params?.prefs), [route?.params?.prefs]);
   const [prefs, setPrefs] = useState(initialPrefs);
+  const [yearPickerOpen, setYearPickerOpen] = useState(false);
 
   useEffect(() => {
     if (route?.params?.prefs === undefined) return;
@@ -58,11 +116,48 @@ export default function MatchPreferencesScreen({ route, navigation }) {
     return { name, description, campus };
   }, [event]);
 
-  const togglePref = (key) => (value) => setPrefs((prev) => ({ ...prev, [key]: value }));
+  const activePreferenceCount = useMemo(
+    () => Object.values(prefs).reduce((count, value) => count + (hasMeaningfulPreferenceValue(value) ? 1 : 0), 0),
+    [prefs]
+  );
+
+  const togglePref = (key) => (value) =>
+    setPrefs((prev) => {
+      const next = { ...prev, [key]: value };
+      if (value) {
+        const option = preferenceOptions.find((opt) => opt.key === key);
+        if (option?.exclusiveWith?.length) {
+          option.exclusiveWith.forEach((conflict) => {
+            next[conflict] = false;
+          });
+        }
+      }
+      return next;
+    });
+
+  const toggleYearSelection = (year) =>
+    setPrefs((prev) => {
+      const current = new Set(prev.preferred_year_classifications || []);
+      if (current.has(year)) {
+        current.delete(year);
+      } else {
+        current.add(year);
+      }
+      return {
+        ...prev,
+        preferred_year_classifications: [...current],
+      };
+    });
+
+  const clearYears = () =>
+    setPrefs((prev) => ({
+      ...prev,
+      preferred_year_classifications: [],
+    }));
 
   const handleConfirm = () => {
-    const hasActive = Object.values(prefs).some(Boolean);
-    navigation.navigate("EventDetails", { event, prefs: hasActive ? prefs : null });
+    const normalizedPrefs = normalizePreferencePayload(prefs);
+    navigation.navigate("EventDetails", { event, prefs: normalizedPrefs });
   };
 
   return (
@@ -85,7 +180,7 @@ export default function MatchPreferencesScreen({ route, navigation }) {
             <View style={styles.heroChip}>
               <Text style={styles.heroChipLabel}>Preferences set</Text>
               <Text style={styles.heroChipValue}>
-                {Object.values(prefs).filter(Boolean).length || "0"}
+                {activePreferenceCount || "0"}
               </Text>
             </View>
           </View>
@@ -116,10 +211,75 @@ export default function MatchPreferencesScreen({ route, navigation }) {
             </View>
           ))}
 
+          <View style={styles.yearCard}>
+            <View style={styles.yearHeader}>
+              <View style={styles.yearHeaderText}>
+                <Text style={styles.yearTitle}>Preferred year classification</Text>
+                <Text style={styles.yearSubtitle}>Tell us which class years you click with most.</Text>
+              </View>
+              {prefs.preferred_year_classifications.length > 0 && (
+                <TouchableOpacity onPress={clearYears}>
+                  <Text style={styles.clearButtonText}>Clear</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            {prefs.preferred_year_classifications.length > 0 && (
+              <View style={styles.selectedChipRow}>
+                {prefs.preferred_year_classifications.map((year) => (
+                  <TouchableOpacity
+                    key={year}
+                    onPress={() => toggleYearSelection(year)}
+                    style={styles.selectedChip}
+                  >
+                    <Text style={styles.selectedChipText}>{year}</Text>
+                    <Ionicons name="close-circle" size={16} color="#fff" />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+            <TouchableOpacity
+              style={styles.dropdownToggle}
+              onPress={() => setYearPickerOpen((prev) => !prev)}
+            >
+              <Text style={styles.dropdownToggleText}>
+                {yearPickerOpen ? "Hide year options" : "Select year preferences"}
+              </Text>
+              <Ionicons
+                name={yearPickerOpen ? "chevron-up" : "chevron-down"}
+                size={18}
+                color="#5B67F1"
+              />
+            </TouchableOpacity>
+            {yearPickerOpen && (
+              <View style={styles.dropdownOptions}>
+                {yearOptions.map((year) => {
+                  const selected = prefs.preferred_year_classifications.includes(year);
+                  return (
+                    <TouchableOpacity
+                      key={year}
+                      style={[styles.dropdownOption, selected && styles.dropdownOptionSelected]}
+                      onPress={() => toggleYearSelection(year)}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownOptionText,
+                          selected && styles.dropdownOptionTextSelected,
+                        ]}
+                      >
+                        {year}
+                      </Text>
+                      {selected && <Ionicons name="checkmark-circle" size={18} color="#fff" />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+
           <View style={styles.guideBox}>
             <Ionicons name="information-circle-outline" size={18} color="#4E5876" />
             <Text style={styles.guideText}>
-              We'll still balance gender, availability, and team sizes. These toggles just give us a louder hint.
+              We'll still balance availability and team sizes. These settings just give us a louder hint.
             </Text>
           </View>
 
@@ -265,6 +425,97 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 13,
     lineHeight: 18,
+  },
+  yearCard: {
+    backgroundColor: "#EEF0FF",
+    borderRadius: 18,
+    padding: 18,
+    marginTop: 6,
+    marginBottom: 16,
+  },
+  yearHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  yearHeaderText: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  yearTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F1840",
+  },
+  yearSubtitle: {
+    marginTop: 4,
+    color: "#4E5876",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  clearButtonText: {
+    color: "#5B67F1",
+    fontWeight: "600",
+  },
+  selectedChipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 12,
+  },
+  selectedChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#5B67F1",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    gap: 4,
+  },
+  selectedChipText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  dropdownToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "rgba(91,103,241,0.2)",
+  },
+  dropdownToggleText: {
+    color: "#0F1840",
+    fontWeight: "600",
+  },
+  dropdownOptions: {
+    marginTop: 10,
+    backgroundColor: "#fff",
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "rgba(91,103,241,0.15)",
+  },
+  dropdownOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  dropdownOptionSelected: {
+    backgroundColor: "#5B67F1",
+  },
+  dropdownOptionText: {
+    color: "#0F1840",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  dropdownOptionTextSelected: {
+    color: "#fff",
   },
   guideBox: {
     flexDirection: "row",

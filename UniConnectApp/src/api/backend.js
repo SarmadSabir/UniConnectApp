@@ -2,10 +2,38 @@ import axios from "axios";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // Your laptop's Wi-Fi IPv4 address
-const API_URL = "http://192.168.18.173:4000";
+const API_URL = "http://192.168.0.105:4000";
 
 const AUTH_STORAGE_KEYS = ["token", "userId", "userName", "userRole"];
 let inMemoryToken = null;
+
+const hasPreferenceValue = (value) => {
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.length > 0;
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return !Number.isNaN(value);
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return Boolean(value);
+};
+
+const normalizePreferencesPayload = (prefs) => {
+  if (!prefs || typeof prefs !== "object") return null;
+  const clean = {};
+  Object.entries(prefs).forEach(([key, value]) => {
+    if (!hasPreferenceValue(value)) return;
+    if (Array.isArray(value)) {
+      clean[key] = value.filter(Boolean);
+      return;
+    }
+    if (typeof value === "boolean") {
+      if (value) clean[key] = true;
+      return;
+    }
+    clean[key] = value;
+  });
+  return Object.keys(clean).length ? clean : null;
+};
 
 async function ensureInMemoryToken() {
   if (inMemoryToken) return inMemoryToken;
@@ -73,8 +101,9 @@ export async function logout() {
 
 export async function joinEvent(eventId, userId, preferences = null) {
   const payload = { user_id: userId };
-  if (preferences && Object.values(preferences).some(Boolean)) {
-    payload.preferences = preferences;
+  const normalizedPreferences = normalizePreferencesPayload(preferences);
+  if (normalizedPreferences) {
+    payload.preferences = normalizedPreferences;
   }
   const res = await axios.post(`${API_URL}/api/events/${eventId}/join`, payload);
   return res.data;
