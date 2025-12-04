@@ -15,8 +15,35 @@ import {
   logout,
   getWaitStatus,
   fetchUserChats,
+  respondToHardFilterPrompt,
 } from "../api/backend";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+
+const MATCHED_EVENTS_KEY = "matchedEventIds";
+const matchedKeyForUser = (uid) =>
+  uid ? `${MATCHED_EVENTS_KEY}:${uid}` : MATCHED_EVENTS_KEY;
+
+const loadMatchedEventsForUser = async (uid) => {
+  if (!uid) {
+    return [];
+  }
+  const storageKey = matchedKeyForUser(uid);
+  try {
+    const raw = await AsyncStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.error("Failed to parse matched events cache", err);
+    return [];
+  }
+};
+
+const persistMatchedEventsForUser = async (uid, events) => {
+  if (!uid) return;
+  const storageKey = matchedKeyForUser(uid);
+  await AsyncStorage.setItem(storageKey, JSON.stringify(events));
+};
 
 const defaultEvent = {
   id: "campus-creator-lab",
@@ -121,6 +148,8 @@ export default function EventDetailsScreen({ route, navigation }) {
   const [matchPreferences, setMatchPreferences] = useState(
     sanitizePreferences(route.params?.prefs)
   );
+  const [hardFilterPrompt, setHardFilterPrompt] = useState(null);
+  const [promptActionLoading, setPromptActionLoading] = useState(false);
 
   const currentEventId = eventDetails?.id || eventDetails?._id || defaultEvent.id;
   const currentEventKeys = useMemo(() => {
@@ -147,6 +176,13 @@ export default function EventDetailsScreen({ route, navigation }) {
       if (map.userName) setUserName(map.userName);
     });
   }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    AsyncStorage.removeItem(MATCHED_EVENTS_KEY).catch((err) => {
+      console.error("Failed to clear legacy matched events cache", err);
+    });
+  }, [userId]);
 
   useEffect(() => {
     if (route.params?.prefs === undefined) return;
@@ -191,33 +227,33 @@ export default function EventDetailsScreen({ route, navigation }) {
   }, [currentEventKeysSignature, wasMatchedBefore]);
 
   const rememberMatchedEvent = useCallback(async (eventKeys) => {
+    if (!userId) return;
     const keys = Array.isArray(eventKeys) ? eventKeys : [eventKeys];
     const normalized = keys.map((value) => toEventKey(value)).filter(Boolean);
     if (!normalized.length) return;
     try {
-      const raw = await AsyncStorage.getItem("matchedEventIds");
-      const set = new Set(raw ? JSON.parse(raw) : []);
+      const existing = await loadMatchedEventsForUser(userId);
+      const set = new Set(Array.isArray(existing) ? existing : []);
       normalized.forEach((key) => set.add(key));
-      await AsyncStorage.setItem("matchedEventIds", JSON.stringify([...set]));
+      await persistMatchedEventsForUser(userId, [...set]);
     } catch (err) {
       console.error("Failed to persist matched events", err);
     }
-  }, []);
+  }, [userId]);
 
   const wasMatchedBefore = useCallback(async (eventKeys) => {
+    if (!userId) return false;
     const keys = Array.isArray(eventKeys) ? eventKeys : [eventKeys];
     const normalized = keys.map((value) => toEventKey(value)).filter(Boolean);
     if (!normalized.length) return false;
     try {
-      const raw = await AsyncStorage.getItem("matchedEventIds");
-      if (!raw) return false;
-      const list = JSON.parse(raw);
+      const list = await loadMatchedEventsForUser(userId);
       return Array.isArray(list) && normalized.some((key) => list.includes(key));
     } catch (err) {
       console.error("Failed to read matched events", err);
       return false;
     }
-  }, []);
+  }, [userId]);
 
   const refreshMembership = useCallback(async () => {
     if (!userId) return false;
@@ -251,6 +287,7 @@ export default function EventDetailsScreen({ route, navigation }) {
         setActiveChat(matchingGroup);
         setStatusMessage("You're matched! Head to the Chats tab to keep talking.");
         setHasJoined(false);
+        setHardFilterPrompt(null);
         const backendKey = toEventKey(matchingGroup?.group?.event_id);
         const keysToStore = backendKey ? [backendKey, ...eventKeys] : eventKeys;
         await rememberMatchedEvent(keysToStore);
@@ -263,6 +300,9 @@ export default function EventDetailsScreen({ route, navigation }) {
 
       setActiveChat(null);
       setMatchedForCurrentEvent(anyMatch);
+      if (anyMatch) {
+        setHardFilterPrompt(null);
+      }
       if (anyMatch) {
         setStatusMessage("You're matched! Head to the Chats tab to keep talking.");
       }
@@ -288,6 +328,11 @@ export default function EventDetailsScreen({ route, navigation }) {
       setStatusLoading(true);
       const res = await getWaitStatus(currentEventId, userId);
       if (!isFresh()) return;
+      if (res.waiting && res.hardFilterPrompt) {
+        setHardFilterPrompt(res.hardFilterPrompt);
+      } else {
+        setHardFilterPrompt(null);
+      }
       if (res.waiting) {
         setHasJoined(true);
         setStatusMessage("You're on the waitlist. We'll notify you when a group is ready.");
@@ -400,6 +445,26 @@ export default function EventDetailsScreen({ route, navigation }) {
     await attemptMatch();
   };
 
+  const handlePromptDecision = useCallback(
+    async (action) => {
+      if (!userId || !currentEventId) return;
+      try {
+        setPromptActionLoading(true);
+        await respondToHardFilterPrompt(currentEventId, userId, action);
+        await refreshWaitStatus();
+        if (action === "accept") {
+          setStatusMessage("Got it! We'll match you with anyone available next.");
+        }
+      } catch (err) {
+        console.error("Hard-filter prompt action failed", err);
+        Alert.alert("Please retry", "We couldn't update your waitlist preference yet.");
+      } finally {
+        setPromptActionLoading(false);
+      }
+    },
+    [userId, currentEventId, refreshWaitStatus]
+  );
+
   const handleLogout = async () => {
     try {
       await logout();
@@ -450,6 +515,50 @@ export default function EventDetailsScreen({ route, navigation }) {
           <View style={styles.statusBox}>
             <Text style={styles.statusLabel}>Status</Text>
             <Text style={styles.statusMessage}>{statusMessage}</Text>
+            {hardFilterPrompt && (
+              <View style={styles.promptBox}>
+                <Text style={styles.promptTitle}>We can broaden your pool</Text>
+                <Text style={styles.promptMessage}>
+                  {hardFilterPrompt.message ||
+                    "Still waiting on your filters. Want to match with anyone?"}
+                </Text>
+                {typeof hardFilterPrompt.deferredMinutes === "number" && (
+                  <Text style={styles.promptMeta}>
+                    Waiting ~{hardFilterPrompt.deferredMinutes} min
+                  </Text>
+                )}
+                <View style={styles.promptActions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.promptButton,
+                      styles.promptPrimary,
+                      styles.promptButtonLeft,
+                      promptActionLoading && styles.disabledButton,
+                    ]}
+                    disabled={promptActionLoading}
+                    onPress={() => handlePromptDecision("accept")}
+                  >
+                    {promptActionLoading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={styles.promptPrimaryText}>Yes, match anyone</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.promptButton,
+                      styles.promptSecondary,
+                      styles.promptButtonRight,
+                      promptActionLoading && styles.disabledButton,
+                    ]}
+                    disabled={promptActionLoading}
+                    onPress={() => handlePromptDecision("decline")}
+                  >
+                    <Text style={styles.promptSecondaryText}>Keep filters</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
           </View>
 
           <TouchableOpacity
@@ -649,6 +758,59 @@ const styles = StyleSheet.create({
   statusMessage: {
     color: "#10194E",
     fontSize: 15,
+  },
+  promptBox: {
+    marginTop: 14,
+    borderRadius: 14,
+    padding: 12,
+    backgroundColor: "rgba(91,103,241,0.12)",
+  },
+  promptTitle: {
+    fontWeight: "700",
+    color: "#10194E",
+    marginBottom: 4,
+  },
+  promptMessage: {
+    color: "#253064",
+    marginBottom: 6,
+  },
+  promptMeta: {
+    fontSize: 12,
+    color: "#5B67F1",
+    marginBottom: 10,
+  },
+  promptActions: {
+    flexDirection: "row",
+    marginTop: 4,
+  },
+  promptButton: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  promptPrimary: {
+    backgroundColor: "#5B67F1",
+  },
+  promptButtonLeft: {
+    marginRight: 6,
+  },
+  promptButtonRight: {
+    marginLeft: 6,
+  },
+  promptSecondary: {
+    borderWidth: 1,
+    borderColor: "#5B67F1",
+    backgroundColor: "#fff",
+  },
+  promptPrimaryText: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  promptSecondaryText: {
+    color: "#5B67F1",
+    fontWeight: "600",
   },
   primaryButton: {
     backgroundColor: "#5B67F1",

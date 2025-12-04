@@ -114,6 +114,14 @@ export async function getWaitStatus(eventId, userId) {
   return res.data;
 }
 
+export async function respondToHardFilterPrompt(eventId, userId, action = "accept") {
+  const res = await axios.post(
+    `${API_URL}/api/events/${eventId}/waitlist/${userId}/hard-filter-opt-in`,
+    { action }
+  );
+  return res.data;
+}
+
 export async function fetchUserChats(userId) {
   const res = await axios.get(`${API_URL}/api/groups/user/${userId}`);
   return res.data;

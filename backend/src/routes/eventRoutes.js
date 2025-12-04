@@ -4,6 +4,11 @@ import Waitlist from "../models/Waitlist.js";
 import { requireAdmin } from "../middleware/auth.js";
 import { normalizeEventId } from "../utils/eventIds.js";
 import { processEventForMatching } from "../services/batchMatchingWorker.js";
+import { harmonizeHardFilterState } from "../utils/hardFilterState.js";
+
+const HARD_FILTER_PROMPT_MESSAGE =
+  process.env.HARD_FILTER_PROMPT_MESSAGE ||
+  "Still waiting for seniors. Want us to broaden your match to anyone?";
 
 const YEAR_CLASSIFICATIONS = ["Freshman", "Sophomore", "Junior", "Senior", "Graduate"];
 
@@ -43,7 +48,30 @@ const normalizePreferencesPayload = (prefs) => {
         }
         clean[key] = value;
     });
-    return Object.keys(clean).length ? clean : null;
+  return Object.keys(clean).length ? clean : null;
+};
+
+const hasHardYearPreference = (entry) => {
+  if (!entry?.preferences || typeof entry.preferences !== "object") return false;
+  if (entry.hard_filter_relaxed) return false;
+  const years = entry.preferences.preferred_year_classifications;
+  return Array.isArray(years) && years.length > 0;
+};
+
+const buildHardFilterPromptPayload = (entry, eventKey) => {
+  if (!entry || entry.hard_filter_prompt_state !== "pending") return null;
+  const deferredMs = entry.hard_filter_deferred_at
+    ? Date.now() - new Date(entry.hard_filter_deferred_at).getTime()
+    : null;
+  return {
+    waitlistId: entry._id?.toString?.() ?? entry._id,
+    eventId: eventKey,
+    message: HARD_FILTER_PROMPT_MESSAGE,
+    promptState: entry.hard_filter_prompt_state,
+    deferredMinutes:
+      deferredMs && Number.isFinite(deferredMs) ? Math.max(0, Math.floor(deferredMs / 60000)) : null,
+    promptedAt: entry.hard_filter_prompted_at,
+  };
 };
 
 const router = express.Router();
@@ -152,10 +180,91 @@ router.get("/:id/wait-status/:userId", async (req, res) => {
         const { id, userId } = req.params;
         const eventKey = normalizeEventId(id);
         const existing = await Waitlist.findOne({ event_id: eventKey, user_id: userId });
-        res.json({ success: true, waiting: Boolean(existing) });
+        if (existing) {
+            const migration = harmonizeHardFilterState(existing);
+            if (migration) {
+                await Waitlist.updateOne({ _id: existing._id }, migration);
+            }
+        }
+        const response = {
+            success: true,
+            waiting: Boolean(existing),
+        };
+        if (existing) {
+            response.waitlistEntryId = existing._id;
+            response.hardFilter = {
+                hasHardPreference: hasHardYearPreference(existing),
+                relaxed: Boolean(existing.hard_filter_relaxed),
+                deferredSince: existing.hard_filter_deferred_at,
+            };
+            response.hardFilterPrompt = buildHardFilterPromptPayload(existing, eventKey);
+        }
+        res.json(response);
     } catch (err) {
         console.error("Status check error:", err);
         res.status(500).json({ success: false, error: "Unable to check waitlist status" });
+    }
+});
+
+/**
+ * HARD FILTER PROMPT ACTION
+ */
+router.post("/:id/waitlist/:userId/hard-filter-opt-in", async (req, res) => {
+    try {
+        const { id, userId } = req.params;
+        const { action = "accept" } = req.body || {};
+        const normalizedAction = `${action}`.toLowerCase();
+        const eventKey = normalizeEventId(id);
+        const entry = await Waitlist.findOne({ event_id: eventKey, user_id: userId });
+
+        if (!entry) {
+            return res.status(404).json({ success: false, error: "Waitlist entry not found" });
+        }
+
+        const migration = harmonizeHardFilterState(entry);
+        if (migration) {
+            await Waitlist.updateOne({ _id: entry._id }, migration);
+        }
+
+        const now = new Date();
+        if (normalizedAction === "accept") {
+            entry.hard_filter_relaxed = true;
+            entry.hard_filter_relaxed_at = now;
+            entry.hard_filter_prompt_state = "accepted";
+            entry.hard_filter_prompted_at = now;
+            await entry.save();
+            return res.json({
+                success: true,
+                relaxed: true,
+                hardFilterPrompt: null,
+                hardFilter: {
+                    hasHardPreference: hasHardYearPreference(entry),
+                    relaxed: true,
+                    deferredSince: entry.hard_filter_deferred_at,
+                },
+            });
+        }
+
+        if (normalizedAction === "decline") {
+            entry.hard_filter_prompt_state = "declined";
+            entry.hard_filter_prompted_at = now;
+            await entry.save();
+            return res.json({
+                success: true,
+                relaxed: Boolean(entry.hard_filter_relaxed),
+                hardFilterPrompt: null,
+                hardFilter: {
+                    hasHardPreference: hasHardYearPreference(entry),
+                    relaxed: Boolean(entry.hard_filter_relaxed),
+                    deferredSince: entry.hard_filter_deferred_at,
+                },
+            });
+        }
+
+        return res.status(400).json({ success: false, error: "Unknown action" });
+    } catch (err) {
+        console.error("Hard-filter opt-in error:", err);
+        res.status(500).json({ success: false, error: "Unable to update waitlist entry" });
     }
 });
 

@@ -4,11 +4,18 @@ import Group from "../models/Group.js";
 import ChatRoom from "../models/ChatRoom.js";
 import { getGroupsFromAI } from "./aiService.js";
 import { normalizeEventId } from "../utils/eventIds.js";
+import { harmonizeHardFilterState } from "../utils/hardFilterState.js";
 
 const MIN_TRIPLET_SIZE = 3;
-const DEFAULT_TRIGGER_SIZE = Number(process.env.MATCH_TRIGGER_BATCH_SIZE || 6);
+const DEFAULT_TRIGGER_SIZE = Number(process.env.MATCH_TRIGGER_BATCH_SIZE || 3);
 const DEFAULT_MAX_WAIT_MS = Number(process.env.MATCH_MAX_WAIT_MS || 60000);
 const DEFAULT_POLL_INTERVAL_MS = Number(process.env.MATCH_POLL_INTERVAL_MS || 5000);
+const HARD_FILTER_PROMPT_MINUTES = Number(process.env.HARD_FILTER_PROMPT_MINUTES || 1);
+const HARD_FILTER_PROMPT_THRESHOLD_MS = HARD_FILTER_PROMPT_MINUTES * 60 * 1000;
+const HARD_FILTER_PROMPT_COOLDOWN_MINUTES = Number(
+  process.env.HARD_FILTER_PROMPT_COOLDOWN_MINUTES || 30
+);
+const HARD_FILTER_PROMPT_COOLDOWN_MS = HARD_FILTER_PROMPT_COOLDOWN_MINUTES * 60 * 1000;
 
 const processingEvents = new Set();
 
@@ -36,14 +43,18 @@ const normalizeArrayPreference = (value = []) => {
     .filter((entry) => entry !== null && entry !== undefined && entry !== "");
 };
 
-const buildPreferenceMeta = (prefs = {}) => {
+const buildPreferenceMeta = (entry) => {
+  const prefs = entry?.preferences;
+  const relaxed = Boolean(entry?.hard_filter_relaxed);
   if (!prefs || typeof prefs !== "object") {
     return {
       hard: { has: false, years: [] },
       soft: { has: false },
     };
   }
-  const hardYears = normalizeArrayPreference(prefs.preferred_year_classifications);
+  const hardYears = relaxed
+    ? []
+    : normalizeArrayPreference(prefs.preferred_year_classifications);
   const hasSoft = SOFT_PREF_KEYS.some((key) => Boolean(prefs[key]));
   return {
     hard: {
@@ -98,6 +109,120 @@ const partitionEligibleQueue = (queue) => {
   return { eligible, deferred };
 };
 
+const trackDeferredHardFilters = async (eventIdLabel, queue, deferred) => {
+  if (!queue.length) {
+    return { prompted: 0 };
+  }
+  const now = new Date();
+  const nowMs = now.getTime();
+  const deferredIds = new Set(deferred.map((entry) => entry._id.toString()));
+  const maintenanceOps = [];
+
+  queue.forEach((entry) => {
+    const entryId = entry._id.toString();
+    const isDeferred = deferredIds.has(entryId);
+    if (isDeferred) {
+      if (!entry.hard_filter_deferred_at) {
+        entry.hard_filter_deferred_at = now;
+        maintenanceOps.push({
+          updateOne: {
+            filter: { _id: entry._id },
+            update: { $set: { hard_filter_deferred_at: now } },
+          },
+        });
+      }
+      return;
+    }
+    const unset = {};
+    let shouldUnset = false;
+    if (entry.hard_filter_deferred_at) {
+      unset.hard_filter_deferred_at = "";
+      entry.hard_filter_deferred_at = null;
+      shouldUnset = true;
+    }
+    if (entry.hard_filter_prompt_state === "pending") {
+      unset.hard_filter_prompt_state = "";
+      unset.hard_filter_prompted_at = "";
+      entry.hard_filter_prompt_state = null;
+      entry.hard_filter_prompted_at = null;
+      shouldUnset = true;
+    }
+    if (shouldUnset) {
+      maintenanceOps.push({
+        updateOne: {
+          filter: { _id: entry._id },
+          update: { $unset: unset },
+        },
+      });
+    }
+  });
+
+  if (maintenanceOps.length) {
+    await Waitlist.bulkWrite(maintenanceOps, { ordered: false }).catch((err) => {
+      console.error("[batch-matcher] Failed to update deferred markers", err);
+    });
+  }
+
+  if (!deferred.length) {
+    return { prompted: 0 };
+  }
+
+  const promptCandidates = deferred.filter((entry) => {
+    if (!entry.preferenceMeta?.hard?.has) return false;
+    if (entry.hard_filter_relaxed) return false;
+    const deferredAtMs = entry.hard_filter_deferred_at
+      ? new Date(entry.hard_filter_deferred_at).getTime()
+      : NaN;
+    if (Number.isNaN(deferredAtMs)) return false;
+    if (nowMs - deferredAtMs < HARD_FILTER_PROMPT_THRESHOLD_MS) return false;
+    if (entry.hard_filter_prompt_state === "pending") return false;
+    if (entry.hard_filter_prompt_state === "accepted") return false;
+    if (
+      entry.hard_filter_prompt_state === "declined" &&
+      entry.hard_filter_prompted_at
+    ) {
+      const promptedAtMs = new Date(entry.hard_filter_prompted_at).getTime();
+      if (!Number.isNaN(promptedAtMs) && nowMs - promptedAtMs < HARD_FILTER_PROMPT_COOLDOWN_MS) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  if (!promptCandidates.length) {
+    return { prompted: 0 };
+  }
+
+  const promptTime = new Date();
+  await Waitlist.bulkWrite(
+    promptCandidates.map((entry) => ({
+      updateOne: {
+        filter: { _id: entry._id },
+        update: {
+          $set: {
+            hard_filter_prompt_state: "pending",
+            hard_filter_prompted_at: promptTime,
+          },
+        },
+      },
+    })),
+    { ordered: false }
+  ).catch((err) => {
+    console.error("[batch-matcher] Failed to stage hard-filter prompts", err);
+  });
+
+  promptCandidates.forEach((entry) => {
+    entry.hard_filter_prompt_state = "pending";
+    entry.hard_filter_prompted_at = promptTime;
+  });
+
+  console.info?.(
+    `[batch-matcher] Prompting ${promptCandidates.length} deferred users on event ${eventIdLabel}`
+  );
+
+  return { prompted: promptCandidates.length };
+};
+
 const summarizePreferences = (queue) => {
   let hasHard = false;
   let hasSoft = false;
@@ -143,6 +268,54 @@ const selectBestTriplet = (groups = [], entryLookup) => {
     }
   });
   return best;
+};
+
+const buildFallbackTriplet = (queue = []) => {
+  if (!Array.isArray(queue) || queue.length < MIN_TRIPLET_SIZE) {
+    return null;
+  }
+  for (let i = 0; i < queue.length - 2; i += 1) {
+    const first = queue[i];
+    if (!first?.user_id) continue;
+    for (let j = i + 1; j < queue.length - 1; j += 1) {
+      const second = queue[j];
+      if (!second?.user_id) continue;
+      if (
+        !meetsHardPreferences(first.preferenceMeta, second.user_id) ||
+        !meetsHardPreferences(second.preferenceMeta, first.user_id)
+      ) {
+        continue;
+      }
+      for (let k = j + 1; k < queue.length; k += 1) {
+        const third = queue[k];
+        if (!third?.user_id) continue;
+        const pairings = [
+          [first, second],
+          [first, third],
+          [second, third],
+        ];
+        const allValid = pairings.every(([a, b]) => {
+          return (
+            meetsHardPreferences(a.preferenceMeta, b.user_id) &&
+            meetsHardPreferences(b.preferenceMeta, a.user_id)
+          );
+        });
+        if (!allValid) {
+          continue;
+        }
+        return {
+          members: [
+            first.user_id._id.toString(),
+            second.user_id._id.toString(),
+            third.user_id._id.toString(),
+          ],
+          score: 0,
+          reasons: ["fallback_basic"],
+        };
+      }
+    }
+  }
+  return null;
 };
 
 const shouldTrigger = (queue, { triggerSize, maxWaitMs, forceProcess }) => {
@@ -224,15 +397,32 @@ export async function processEventForMatching(rawEventId, options = {}) {
       await Waitlist.deleteMany({ _id: { $in: missing.map((entry) => entry._id) } });
     }
     const queue = waitlist.filter((entry) => entry.user_id);
+    const legacyFixes = [];
     queue.forEach((entry) => {
-      entry.preferenceMeta = buildPreferenceMeta(entry.preferences);
+      const migration = harmonizeHardFilterState(entry);
+      if (migration) {
+        legacyFixes.push({
+          updateOne: {
+            filter: { _id: entry._id },
+            update: migration,
+          },
+        });
+      }
+      entry.preferenceMeta = buildPreferenceMeta(entry);
     });
+
+    if (legacyFixes.length) {
+      await Waitlist.bulkWrite(legacyFixes, { ordered: false }).catch((err) => {
+        console.error("[batch-matcher] Failed to normalize hard-filter state", err);
+      });
+    }
 
     if (!queue.length) {
       return { triggered: false, message: "No users waiting", queueSize: 0 };
     }
 
-    const { eligible: eligibleQueue } = partitionEligibleQueue(queue);
+    const { eligible: eligibleQueue, deferred: deferredQueue } = partitionEligibleQueue(queue);
+    await trackDeferredHardFilters(eventIdLabel, queue, deferredQueue);
 
     if (!eligibleQueue.length) {
       return {
@@ -267,13 +457,27 @@ export async function processEventForMatching(rawEventId, options = {}) {
       entryLookup.set(entry.user_id._id.toString(), entry);
     });
 
-    const aiResponse = await getGroupsFromAI(
-      eventIdLabel,
-      preferenceSummary.mode,
-      preferenceSummary.summary,
-      aiUsers
-    );
-    const bestTriplet = selectBestTriplet(aiResponse?.groups || [], entryLookup);
+    let aiResponse = null;
+    try {
+      aiResponse = await getGroupsFromAI(
+        eventIdLabel,
+        preferenceSummary.mode,
+        preferenceSummary.summary,
+        aiUsers
+      );
+    } catch (err) {
+      console.error("[batch-matcher] AI request failed, attempting fallback", err);
+    }
+    let bestTriplet = selectBestTriplet(aiResponse?.groups || [], entryLookup);
+
+    if (!bestTriplet) {
+      bestTriplet = buildFallbackTriplet(eligibleQueue);
+      if (bestTriplet) {
+        console.warn(
+          `[batch-matcher] Falling back to local matching for event ${eventIdLabel}`
+        );
+      }
+    }
 
     if (!bestTriplet) {
       return {
