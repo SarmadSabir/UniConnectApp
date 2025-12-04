@@ -201,13 +201,15 @@ export default function MatchPreferencesScreen({ route, navigation }) {
                 </View>
                 <Text style={styles.preferenceDescription}>{option.description}</Text>
               </View>
-              <Switch
-                trackColor={{ false: "rgba(15, 24, 64, 0.16)", true: "#8B93FF" }}
-                thumbColor="#fff"
-                ios_backgroundColor="rgba(15, 24, 64, 0.25)"
-                value={prefs[option.key]}
-                onValueChange={togglePref(option.key)}
-              />
+              <View style={styles.switchWrapper}>
+                <Switch
+                  trackColor={{ false: "rgba(15, 24, 64, 0.16)", true: "#8B93FF" }}
+                  thumbColor="#fff"
+                  ios_backgroundColor="rgba(15, 24, 64, 0.25)"
+                  value={prefs[option.key]}
+                  onValueChange={togglePref(option.key)}
+                />
+              </View>
             </View>
           ))}
 
@@ -276,12 +278,12 @@ export default function MatchPreferencesScreen({ route, navigation }) {
             )}
           </View>
 
-          <View style={styles.guideBox}>
+          {/* <View style={styles.guideBox}>
             <Ionicons name="information-circle-outline" size={18} color="#4E5876" />
             <Text style={styles.guideText}>
               We'll still balance availability and team sizes. These settings just give us a louder hint.
             </Text>
-          </View>
+          </View> */}
 
           <TouchableOpacity style={styles.primaryButton} onPress={handleConfirm}>
             <Text style={styles.primaryButtonText}>Save & continue</Text>
@@ -396,7 +398,7 @@ const styles = StyleSheet.create({
   },
   preferenceRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     backgroundColor: "#F4F5FF",
     borderRadius: 18,
@@ -407,6 +409,10 @@ const styles = StyleSheet.create({
   preferenceText: {
     flex: 1,
     paddingRight: 14,
+  },
+  switchWrapper: {
+    marginLeft: 8,
+    justifyContent: "center",
   },
   preferenceLabelRow: {
     flexDirection: "row",

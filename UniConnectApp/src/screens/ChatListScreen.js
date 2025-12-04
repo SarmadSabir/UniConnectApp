@@ -11,8 +11,46 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import { fetchUserChats } from "../api/backend";
+import { fetchUserChats, fetchEvents } from "../api/backend";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+const toEventKey = (value) => {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "object") {
+    if (value.$oid) return value.$oid;
+    if (value._id) return toEventKey(value._id);
+  }
+  if (typeof value.toString === "function") return value.toString();
+  return "";
+};
+
+const slugify = (value) => {
+  if (typeof value !== "string") return "";
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
+
+const collectEventKeys = (event) => {
+  if (!event) return [];
+  const keys = new Set();
+  const push = (val) => {
+    const key = toEventKey(val);
+    if (key) keys.add(key);
+  };
+  push(event._id);
+  push(event.id);
+  push(event.event_id);
+  if (Array.isArray(event.ids)) {
+    event.ids.forEach(push);
+  }
+  const slug = slugify(event.title || event.name || "");
+  if (slug) keys.add(slug);
+  return [...keys];
+};
 
 const formatMemberLabel = (value = "") => {
   if (!value) return "";
@@ -34,6 +72,7 @@ export default function ChatListScreen() {
   const [chats, setChats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [eventNames, setEventNames] = useState({});
 
   useEffect(() => {
     AsyncStorage.getItem("userId").then((id) => setUserId(id));
@@ -54,6 +93,27 @@ export default function ChatListScreen() {
     },
     [userId]
   );
+
+  useEffect(() => {
+    const loadEvents = async () => {
+      try {
+        const res = await fetchEvents();
+        const map = {};
+        (res.events || []).forEach((evt) => {
+          const label = evt.title || evt.name || "UniConnect Event";
+          collectEventKeys(evt).forEach((key) => {
+            if (key) {
+              map[key] = label;
+            }
+          });
+        });
+        setEventNames(map);
+      } catch (err) {
+        console.error("Failed to load events for chat list", err);
+      }
+    };
+    loadEvents();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -76,17 +136,26 @@ export default function ChatListScreen() {
     });
   };
 
+  const getEventName = (group) => {
+    const key = toEventKey(group?.event_id);
+    if (key && eventNames[key]) {
+      return eventNames[key];
+    }
+    if (group?.event_id) {
+      const short = key || `${group.event_id}`;
+      return `Event ${short.slice(-6)}`;
+    }
+    return "UniConnect Event";
+  };
+
   const renderItem = ({ item }) => (
     <TouchableOpacity style={styles.chatCard} onPress={() => openChat(item)}>
       <View style={styles.chatHeader}>
-        <Text style={styles.chatTitle}>Event #{item.group.event_id}</Text>
+        <Text style={styles.chatTitle}>{getEventName(item.group)}</Text>
         <Text style={styles.chatMembers}>
           {item.group.members.length} members
         </Text>
       </View>
-      <Text style={styles.chatSub}>
-        Score: {item.group.score ? item.group.score.toFixed(2) : "-"}
-      </Text>
       <View style={styles.memberRow}>
         {item.group.members.slice(0, 3).map((m, idx) => (
           <Text key={`${item.group._id}-${idx}`} style={styles.memberTag}>
@@ -94,11 +163,6 @@ export default function ChatListScreen() {
           </Text>
         ))}
       </View>
-      {item.group.reasons?.length ? (
-        <Text style={styles.chatReason}>
-          Reasons: {item.group.reasons.join(", ")}
-        </Text>
-      ) : null}
     </TouchableOpacity>
   );
 
@@ -191,10 +255,6 @@ const styles = StyleSheet.create({
   chatMembers: {
     color: "#4E5876",
   },
-  chatSub: {
-    color: "#4E5876",
-    marginBottom: 6,
-  },
   memberRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -208,10 +268,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 999,
     fontWeight: "600",
-    fontSize: 12,
-  },
-  chatReason: {
-    color: "#7D859E",
     fontSize: 12,
   },
   emptyState: {

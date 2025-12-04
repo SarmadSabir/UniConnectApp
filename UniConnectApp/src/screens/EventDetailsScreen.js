@@ -589,7 +589,7 @@ export default function EventDetailsScreen({ route, navigation }) {
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity
+          {/* <TouchableOpacity
             style={[
               styles.secondaryButton,
               ((hasJoined === false && !activeChat) || matching) && styles.disabledSecondary,
@@ -604,7 +604,7 @@ export default function EventDetailsScreen({ route, navigation }) {
                 {activeChat ? "Open my chat" : "Check for matches"}
               </Text>
             )}
-          </TouchableOpacity>
+          </TouchableOpacity> */}
 
           <TouchableOpacity
             style={styles.linkButton}
