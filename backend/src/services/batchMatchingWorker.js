@@ -7,7 +7,7 @@ import { normalizeEventId } from "../utils/eventIds.js";
 import { harmonizeHardFilterState } from "../utils/hardFilterState.js";
 
 const MIN_TRIPLET_SIZE = 3;
-const DEFAULT_TRIGGER_SIZE = Number(process.env.MATCH_TRIGGER_BATCH_SIZE || 3);
+const DEFAULT_TRIGGER_SIZE = Number(process.env.MATCH_TRIGGER_BATCH_SIZE || 4);
 const DEFAULT_MAX_WAIT_MS = Number(process.env.MATCH_MAX_WAIT_MS || 60000);
 const DEFAULT_POLL_INTERVAL_MS = Number(process.env.MATCH_POLL_INTERVAL_MS || 5000);
 const HARD_FILTER_PROMPT_MINUTES = Number(process.env.HARD_FILTER_PROMPT_MINUTES || 1);
@@ -73,6 +73,80 @@ const meetsHardPreferences = (entryMeta, candidateProfile) => {
   const candidateYear = candidateProfile.year_classification;
   if (!candidateYear) return false;
   return entryMeta.hard.years.includes(candidateYear);
+};
+
+const normalizeInterestList = (profile) => {
+  if (!profile || !Array.isArray(profile.interests)) {
+    return [];
+  }
+  return profile.interests
+    .map((interest) => {
+      if (typeof interest === "string") return interest.trim().toLowerCase();
+      if (interest === null || interest === undefined) return "";
+      return `${interest}`.trim().toLowerCase();
+    })
+    .filter(Boolean);
+};
+
+const meetsSoftPreferences = (entry, candidateProfile) => {
+  if (!entry || !candidateProfile) {
+    return false;
+  }
+  const prefs = entry.preferences || {};
+  const selfProfile = entry.user_id;
+  if (!prefs || typeof prefs !== "object") {
+    return true;
+  }
+
+  if (prefs.want_same_gender) {
+    const selfGender = selfProfile?.gender;
+    const candidateGender = candidateProfile.gender;
+    if (!selfGender || !candidateGender || selfGender !== candidateGender) {
+      return false;
+    }
+  }
+
+  if (prefs.want_same_major) {
+    const selfMajor = selfProfile?.major;
+    const candidateMajor = candidateProfile.major;
+    if (!selfMajor || !candidateMajor || selfMajor !== candidateMajor) {
+      return false;
+    }
+  }
+
+  if (prefs.want_different_major) {
+    const selfMajor = selfProfile?.major;
+    const candidateMajor = candidateProfile.major;
+    if (!selfMajor || !candidateMajor || selfMajor === candidateMajor) {
+      return false;
+    }
+  }
+
+  if (prefs.want_same_interests) {
+    const mine = normalizeInterestList(selfProfile);
+    const theirs = normalizeInterestList(candidateProfile);
+    if (!mine.length || !theirs.length) {
+      return false;
+    }
+    const hasOverlap = mine.some((interest) => theirs.includes(interest));
+    if (!hasOverlap) {
+      return false;
+    }
+  }
+
+  return true;
+};
+
+const entriesAreCompatible = (entryA, entryB) => {
+  if (!entryA || !entryB) return false;
+  const profileA = entryA.user_id;
+  const profileB = entryB.user_id;
+  if (!profileA || !profileB) return false;
+  if (!meetsHardPreferences(entryA.preferenceMeta, profileB)) return false;
+  if (!meetsHardPreferences(entryB.preferenceMeta, profileA)) return false;
+  if (!meetsSoftPreferences(entryA, profileB)) return false;
+  if (!meetsSoftPreferences(entryB, profileA)) return false;
+  return true;
 };
 
 const partitionEligibleQueue = (queue) => {
@@ -257,9 +331,7 @@ const selectBestTriplet = (groups = [], entryLookup) => {
         .map((partnerId) => entryLookup.get(partnerId.toString()))
         .filter(Boolean);
       if (partners.length !== MIN_TRIPLET_SIZE - 1) return false;
-      return partners.every((partner) =>
-        meetsHardPreferences(entry.preferenceMeta, partner.user_id)
-      );
+      return partners.every((partner) => entriesAreCompatible(entry, partner));
     });
     if (!respectsConstraints) return;
     const score = typeof group.score === "number" ? group.score : Number.NEGATIVE_INFINITY;
@@ -280,10 +352,7 @@ const buildFallbackTriplet = (queue = []) => {
     for (let j = i + 1; j < queue.length - 1; j += 1) {
       const second = queue[j];
       if (!second?.user_id) continue;
-      if (
-        !meetsHardPreferences(first.preferenceMeta, second.user_id) ||
-        !meetsHardPreferences(second.preferenceMeta, first.user_id)
-      ) {
+      if (!entriesAreCompatible(first, second)) {
         continue;
       }
       for (let k = j + 1; k < queue.length; k += 1) {
@@ -294,12 +363,7 @@ const buildFallbackTriplet = (queue = []) => {
           [first, third],
           [second, third],
         ];
-        const allValid = pairings.every(([a, b]) => {
-          return (
-            meetsHardPreferences(a.preferenceMeta, b.user_id) &&
-            meetsHardPreferences(b.preferenceMeta, a.user_id)
-          );
-        });
+        const allValid = pairings.every(([a, b]) => entriesAreCompatible(a, b));
         if (!allValid) {
           continue;
         }
