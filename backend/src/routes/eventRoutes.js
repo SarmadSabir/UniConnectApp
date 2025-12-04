@@ -1,6 +1,9 @@
 import express from "express";
+import mongoose from "mongoose";
 import Event from "../models/Event.js";
 import Waitlist from "../models/Waitlist.js";
+import Group from "../models/Group.js";
+import ChatRoom from "../models/ChatRoom.js";
 import { requireAdmin } from "../middleware/auth.js";
 import { normalizeEventId } from "../utils/eventIds.js";
 import { processEventForMatching } from "../services/batchMatchingWorker.js";
@@ -76,6 +79,73 @@ const buildHardFilterPromptPayload = (entry, eventKey) => {
 
 const router = express.Router();
 
+const collectWaitlistKeys = (...values) => {
+  const objectTargets = new Map();
+  const stringTargets = new Set();
+  const push = (entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      const trimmed = entry.trim();
+      if (trimmed) {
+        stringTargets.add(trimmed);
+      }
+      return;
+    }
+    if (entry instanceof mongoose.Types.ObjectId) {
+      const label = entry.toString();
+      objectTargets.set(label, entry);
+      stringTargets.add(label);
+      return;
+    }
+    if (typeof entry.toString === "function") {
+      const label = entry.toString();
+      if (label) {
+        stringTargets.add(label);
+      }
+    }
+  };
+  values.forEach((raw) => {
+    const normalized = normalizeEventId(raw);
+    push(raw);
+    if (normalized !== raw) {
+      push(normalized);
+    }
+  });
+  return [...objectTargets.values(), ...Array.from(stringTargets)];
+};
+
+const collectGroupLabels = (...values) => {
+  const labels = new Set();
+  const push = (entry) => {
+    if (!entry) return;
+    if (typeof entry === "string") {
+      const trimmed = entry.trim();
+      if (trimmed) {
+        labels.add(trimmed);
+      }
+      return;
+    }
+    if (entry instanceof mongoose.Types.ObjectId) {
+      labels.add(entry.toString());
+      return;
+    }
+    if (typeof entry.toString === "function") {
+      const label = entry.toString();
+      if (label) {
+        labels.add(label);
+      }
+    }
+  };
+  values.forEach((raw) => {
+    const normalized = normalizeEventId(raw);
+    push(raw);
+    if (normalized !== raw) {
+      push(normalized);
+    }
+  });
+  return Array.from(labels);
+};
+
 /**
  * LIST EVENTS + SEED DEFAULTS
  */
@@ -126,6 +196,66 @@ router.post("/", requireAdmin, async (req, res) => {
     } catch (err) {
         console.error("Event create error:", err);
         res.status(500).json({ success: false, error: "Unable to create event" });
+    }
+});
+
+/**
+ * DELETE EVENT + CLEANUP
+ */
+router.delete("/:id", requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return res.status(400).json({ success: false, error: "Event id is required" });
+        }
+
+        let eventDoc = null;
+        try {
+            eventDoc = await Event.findById(id);
+        } catch (castErr) {
+            return res.status(400).json({ success: false, error: "Invalid event id" });
+        }
+
+        if (!eventDoc) {
+            return res.status(404).json({ success: false, error: "Event not found" });
+        }
+
+        const waitlistTargets = collectWaitlistKeys(id, eventDoc._id, eventDoc.id);
+        const groupLabels = collectGroupLabels(id, eventDoc._id, eventDoc.id);
+
+        let waitlistDeleted = 0;
+        if (waitlistTargets.length) {
+            const waitlistResult = await Waitlist.deleteMany({ event_id: { $in: waitlistTargets } });
+            waitlistDeleted = waitlistResult.deletedCount || 0;
+        }
+
+        let groupDeleted = 0;
+        let chatDeleted = 0;
+        if (groupLabels.length) {
+            const groups = await Group.find({ event_id: { $in: groupLabels } }, { _id: 1 }).lean();
+            const groupIds = groups.map((entry) => entry._id);
+            if (groupIds.length) {
+                const chatResult = await ChatRoom.deleteMany({ group_id: { $in: groupIds } });
+                chatDeleted = chatResult.deletedCount || 0;
+                const groupResult = await Group.deleteMany({ _id: { $in: groupIds } });
+                groupDeleted = groupResult.deletedCount || 0;
+            }
+        }
+
+        await Event.deleteOne({ _id: eventDoc._id });
+
+        res.json({
+            success: true,
+            deleted: {
+                eventId: eventDoc._id.toString(),
+                waitlistEntries: waitlistDeleted,
+                groups: groupDeleted,
+                chatrooms: chatDeleted,
+            },
+        });
+    } catch (err) {
+        console.error("Event delete error:", err);
+        res.status(500).json({ success: false, error: "Unable to delete event" });
     }
 });
 

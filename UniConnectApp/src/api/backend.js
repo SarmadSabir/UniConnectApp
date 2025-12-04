@@ -140,6 +140,17 @@ export async function createEvent(eventData) {
   return res.data;
 }
 
+export async function deleteEvent(eventId) {
+  if (!eventId) {
+    throw new Error("eventId is required");
+  }
+  const headers = await buildAuthHeaders();
+  const res = await handleAuthRequest(() =>
+    axios.delete(`${API_URL}/api/events/${eventId}`, { headers })
+  );
+  return res.data;
+}
+
 // ----------------------
 // MATCH SYSTEM
 // ----------------------

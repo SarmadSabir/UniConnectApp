@@ -11,7 +11,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { fetchEvents, createEvent } from "../api/backend";
+import { fetchEvents, createEvent, deleteEvent } from "../api/backend";
 
 export default function AdminEventManagerScreen({ navigation }) {
   const [events, setEvents] = useState([]);
@@ -22,6 +22,20 @@ export default function AdminEventManagerScreen({ navigation }) {
     date: "",
   });
   const [creating, setCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+
+  const handleAuthExpired = useCallback(() => {
+    Alert.alert("Session expired", "Please log in again.", [
+      {
+        text: "OK",
+        onPress: () =>
+          navigation.reset({
+            index: 0,
+            routes: [{ name: "Login" }],
+          }),
+      },
+    ]);
+  }, [navigation]);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -30,16 +44,7 @@ export default function AdminEventManagerScreen({ navigation }) {
       setEvents(res.events || []);
     } catch (err) {
       if (err?.code === "AUTH_EXPIRED") {
-        Alert.alert("Session expired", "Please log in again.", [
-          {
-            text: "OK",
-            onPress: () =>
-              navigation.reset({
-                index: 0,
-                routes: [{ name: "Login" }],
-              }),
-          },
-        ]);
+        handleAuthExpired();
         return;
       }
       console.error("Admin events load error", err);
@@ -47,7 +52,7 @@ export default function AdminEventManagerScreen({ navigation }) {
     } finally {
       setLoading(false);
     }
-  }, [navigation]);
+  }, [handleAuthExpired]);
 
   useEffect(() => {
     loadEvents();
@@ -73,16 +78,7 @@ export default function AdminEventManagerScreen({ navigation }) {
       await loadEvents();
     } catch (err) {
       if (err?.code === "AUTH_EXPIRED") {
-        Alert.alert("Session expired", "Please log in again.", [
-          {
-            text: "OK",
-            onPress: () =>
-              navigation.reset({
-                index: 0,
-                routes: [{ name: "Login" }],
-              }),
-          },
-        ]);
+        handleAuthExpired();
         return;
       }
       console.error("Admin create event error", err);
@@ -93,6 +89,44 @@ export default function AdminEventManagerScreen({ navigation }) {
     }
   };
 
+  const handleDelete = useCallback(
+    async (eventId) => {
+      if (!eventId) return;
+      try {
+        setDeletingId(eventId);
+        await deleteEvent(eventId);
+        await loadEvents();
+      } catch (err) {
+        if (err?.code === "AUTH_EXPIRED") {
+          handleAuthExpired();
+          return;
+        }
+        console.error("Admin delete event error", err);
+        const message = err.response?.data?.error || "Unable to delete event.";
+        Alert.alert("Error", message);
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [loadEvents, handleAuthExpired]
+  );
+
+  const confirmDelete = (event) => {
+    if (!event?._id) return;
+    Alert.alert(
+      "Delete this event?",
+      `Deleting "${event.title || "this event"}" will remove its waitlist and chats. This can't be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => handleDelete(event._id),
+        },
+      ]
+    );
+  };
+
   const renderEvent = ({ item }) => (
     <View style={styles.eventCard}>
       <Text style={styles.eventTitle}>{item.title}</Text>
@@ -100,6 +134,22 @@ export default function AdminEventManagerScreen({ navigation }) {
         {item.date ? new Date(item.date).toLocaleString() : "Date TBD"}
       </Text>
       <Text style={styles.eventDesc}>{item.description || "No description provided."}</Text>
+      <View style={styles.eventActions}>
+        <TouchableOpacity
+          style={[
+            styles.deleteButton,
+            deletingId === item._id && styles.disabledButton,
+          ]}
+          onPress={() => confirmDelete(item)}
+          disabled={deletingId === item._id}
+        >
+          {deletingId === item._id ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.deleteButtonText}>Delete Event</Text>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 
@@ -225,6 +275,19 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.6,
+  },
+  eventActions: {
+    marginTop: 12,
+  },
+  deleteButton: {
+    backgroundColor: "#E74646",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  deleteButtonText: {
+    color: "#fff",
+    fontWeight: "600",
   },
   eventCard: {
     backgroundColor: "rgba(255,255,255,0.92)",
