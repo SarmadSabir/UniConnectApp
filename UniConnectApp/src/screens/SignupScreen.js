@@ -336,6 +336,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#10194E",
     backgroundColor: "#F8F9FF",
+    marginBottom: 12,
   },
   pillGroup: {
     flexDirection: "row",

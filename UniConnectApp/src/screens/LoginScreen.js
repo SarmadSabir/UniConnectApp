@@ -11,11 +11,13 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { login } from "../api/backend";
+import Ionicons from "@expo/vector-icons/Ionicons";
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [passwordVisible, setPasswordVisible] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -61,14 +63,27 @@ export default function LoginScreen({ navigation }) {
             autoCapitalize="none"
             style={styles.input}
           />
-          <TextInput
-            placeholder="Password"
-            placeholderTextColor="#8A8FA6"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            style={styles.input}
-          />
+          <View style={styles.passwordField}>
+            <TextInput
+              placeholder="Password"
+              placeholderTextColor="#8A8FA6"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!passwordVisible}
+              style={[styles.input, styles.passwordInput]}
+            />
+            <TouchableOpacity
+              style={styles.eyeButton}
+              onPress={() => setPasswordVisible((prev) => !prev)}
+              accessibilityLabel={passwordVisible ? "Hide password" : "Show password"}
+            >
+              <Ionicons
+                name={passwordVisible ? "eye-off" : "eye"}
+                size={20}
+                color="#5B67F1"
+              />
+            </TouchableOpacity>
+          </View>
 
           <TouchableOpacity
             style={[styles.primaryButton, loading && styles.disabledButton]}
@@ -146,6 +161,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#10194E",
     backgroundColor: "#F8F9FF",
+  },
+  passwordField: {
+    position: "relative",
+    marginBottom: 14,
+  },
+  passwordInput: {
+    paddingRight: 44,
+    marginBottom: 0,
+  },
+  eyeButton: {
+    position: "absolute",
+    right: 12,
+    top: 0,
+    bottom: 0,
+    justifyContent: "center",
   },
   primaryButton: {
     backgroundColor: "#5B67F1",

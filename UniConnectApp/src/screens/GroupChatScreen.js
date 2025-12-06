@@ -59,36 +59,33 @@ const buildGroupTitle = (members = [], fallbackId) => {
     .filter(Boolean)
     .map((name) => name.split(" ")[0])
     .filter(Boolean);
-  if (!names.length) {
-    const fallback = toFallbackHandle(fallbackId);
-    return fallback ? `Room ${fallback}` : "Group Chat";
+  if (names.length) {
+    return names.join(", ");
   }
-  if (names.length === 1) {
-    return `${names[0]}'s Crew`;
-  }
-  if (names.length === 2) {
-    return `${names[0]} & ${names[1]}`;
-  }
-  return `${names[0]}, ${names[1]} +${names.length - 2}`;
+  const fallback = toFallbackHandle(fallbackId);
+  return fallback ? `Room ${fallback}` : "Group Chat";
 };
 
-const ChatBubble = ({ item, isMine }) => (
-  <View
-    style={[
-      styles.bubble,
-      isMine ? styles.myBubble : styles.theirBubble,
-      isMine ? styles.alignRight : styles.alignLeft,
-    ]}
-  >
-    <Text style={[styles.bubbleSender, isMine && styles.myBubbleSender]}>
-      {formatMemberLabel(item.sender)}
-    </Text>
-    <Text style={[styles.bubbleText, isMine && styles.myBubbleText]}>{item.text}</Text>
-  </View>
-);
+const ChatBubble = ({ item, isMine }) => {
+  const senderLabel = isMine ? "You" : formatMemberLabel(item.sender);
+  return (
+    <View
+      style={[
+        styles.bubble,
+        isMine ? styles.myBubble : styles.theirBubble,
+        isMine ? styles.alignRight : styles.alignLeft,
+      ]}
+    >
+      <Text style={[styles.bubbleSender, isMine && styles.myBubbleSender]}>
+        {senderLabel}
+      </Text>
+      <Text style={[styles.bubbleText, isMine && styles.myBubbleText]}>{item.text}</Text>
+    </View>
+  );
+};
 
 export default function GroupChatScreen({ route, navigation }) {
-  const { groupId, chatroomId, members = [] } = route.params;
+  const { groupId, chatroomId, members = [], eventName = "" } = route.params;
 
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -104,7 +101,11 @@ export default function GroupChatScreen({ route, navigation }) {
     }, {});
   }, [members]);
 
-  const groupTitle = useMemo(() => buildGroupTitle(members, groupId), [members, groupId]);
+  const fallbackGroupTitle = useMemo(
+    () => buildGroupTitle(members, groupId),
+    [members, groupId]
+  );
+  const headerTitle = (eventName && eventName.trim()) || fallbackGroupTitle;
 
   useEffect(() => {
     AsyncStorage.getItem("userId").then((id) => setUserId(id));
@@ -178,14 +179,16 @@ export default function GroupChatScreen({ route, navigation }) {
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-        keyboardVerticalOffset={90}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.select({ ios: 16, android: 0 })}
       >
         <View style={styles.header}>
           <View>
-            <Text style={styles.headerTitle}>{groupTitle}</Text>
+            <Text style={styles.headerTitle}>{headerTitle}</Text>
             <Text style={styles.headerSubtitle}>
-              Group chat · {members.length} {members.length === 1 ? "member" : "members"}
+              {`Group chat \u00b7 ${members.length} ${
+                members.length === 1 ? "member" : "members"
+              }`}
             </Text>
           </View>
         </View>
@@ -263,7 +266,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 20,
     paddingTop: 10,
-    paddingBottom: 16,
+    paddingBottom: Platform.OS === "ios" ? 4 : 12,
   },
   header: {
     paddingVertical: 12,
@@ -271,10 +274,10 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 24,
     fontWeight: "700",
-    color: "#10194E",
+    color: "#FFFFFF",
   },
   headerSubtitle: {
-    color: "#4E5876",
+    color: "rgba(255,255,255,0.8)",
     marginTop: 4,
   },
   memberBox: {

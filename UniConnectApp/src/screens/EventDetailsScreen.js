@@ -143,13 +143,20 @@ export default function EventDetailsScreen({ route, navigation }) {
   const [matchedForCurrentEvent, setMatchedForCurrentEvent] = useState(false);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusMessage, setStatusMessage] = useState(
-    "Tap Go Solo and we'll put you in the waitlist."
+    "Tap AI MATCH and we'll put you in the waitlist."
   );
   const [matchPreferences, setMatchPreferences] = useState(
     sanitizePreferences(route.params?.prefs)
   );
   const [hardFilterPrompt, setHardFilterPrompt] = useState(null);
   const [promptActionLoading, setPromptActionLoading] = useState(false);
+  const firstName = useMemo(() => {
+    if (!userName) return "";
+    const trimmed = userName.trim();
+    if (!trimmed) return "";
+    const segments = trimmed.split(/\s+/);
+    return segments[0] || trimmed;
+  }, [userName]);
 
   const currentEventId = eventDetails?.id || eventDetails?._id || defaultEvent.id;
   const currentEventKeys = useMemo(() => {
@@ -205,7 +212,7 @@ export default function EventDetailsScreen({ route, navigation }) {
       setStatusMessage(
         previouslyMatched
           ? "You're matched! Head to the Chats tab to keep talking."
-          : "Tap Go Solo and we'll put you in the waitlist."
+          : "Tap AI MATCH and we'll put you in the waitlist."
       );
       setStatusLoading(false);
     };
@@ -338,7 +345,7 @@ export default function EventDetailsScreen({ route, navigation }) {
         setStatusMessage("You're on the waitlist. We'll notify you when a group is ready.");
       } else if (!activeChat && !matchedForCurrentEvent) {
         setHasJoined(false);
-        setStatusMessage("Tap Go Solo and we'll put you in the waitlist.");
+        setStatusMessage("Tap AI MATCH and we'll put you in the waitlist.");
       }
     } catch (err) {
       console.error("Failed to fetch wait status", err);
@@ -373,9 +380,10 @@ export default function EventDetailsScreen({ route, navigation }) {
         groupId: groupDoc.group._id,
         chatroomId: groupDoc.chatroom._id,
         members: groupDoc.group.members,
+        eventName: currentEventName,
       });
     },
-    [navigation]
+    [navigation, currentEventName]
   );
 
   const attemptMatch = useCallback(async () => {
@@ -477,8 +485,8 @@ export default function EventDetailsScreen({ route, navigation }) {
     <SafeAreaView style={styles.safe} edges={["top", "left", "right"]}>
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.headerRow}>
-          <Text style={styles.brand}>
-            {userName ? `Welcome back, ${userName}` : "Welcome back"}
+          <Text style={styles.brand} numberOfLines={1} adjustsFontSizeToFit>
+            {firstName ? `Welcome back, ${firstName}` : "Welcome back"}
           </Text>
           <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
             <Text style={styles.logoutText}>Logout</Text>
@@ -487,7 +495,7 @@ export default function EventDetailsScreen({ route, navigation }) {
 
         <View style={styles.heroCard}>
           <Text style={styles.heroGreeting}>
-            {userName ? `Hey ${userName.split(" ")[0]} 👋` : "Ready to connect?"}
+            {firstName ? `Hey ${firstName} 👋` : "Ready to connect?"}
           </Text>
           <Text style={styles.heroTitle}>{currentEventName}</Text>
           <Text style={styles.heroSubtitle}>{currentEventDescription}</Text>
@@ -522,11 +530,6 @@ export default function EventDetailsScreen({ route, navigation }) {
                   {hardFilterPrompt.message ||
                     "Still waiting on your filters. Want to match with anyone?"}
                 </Text>
-                {typeof hardFilterPrompt.deferredMinutes === "number" && (
-                  <Text style={styles.promptMeta}>
-                    Waiting ~{hardFilterPrompt.deferredMinutes} min
-                  </Text>
-                )}
                 <View style={styles.promptActions}>
                   <TouchableOpacity
                     style={[
@@ -584,7 +587,7 @@ export default function EventDetailsScreen({ route, navigation }) {
                   ? "Group ready"
                   : hasJoined
                   ? "You're already queued"
-                  : "Go Solo (AI decide)"}
+                  : "AI MATCH"}
               </Text>
             )}
           </TouchableOpacity>
@@ -644,12 +647,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    columnGap: 12,
     marginBottom: 20,
   },
   brand: {
     fontSize: 26,
     fontWeight: "700",
     color: "#F5F7FF",
+    flexShrink: 1,
+    marginRight: 12,
   },
   logoutButton: {
     paddingVertical: 6,
@@ -658,6 +664,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255, 255, 255, 0.16)",
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.3)",
+    flexShrink: 0,
   },
   logoutText: {
     color: "#fff",
@@ -781,14 +788,18 @@ const styles = StyleSheet.create({
   },
   promptActions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     marginTop: 4,
   },
   promptButton: {
     flex: 1,
     borderRadius: 12,
     paddingVertical: 12,
+    paddingHorizontal: 12,
     alignItems: "center",
     justifyContent: "center",
+    minHeight: 48,
+    marginBottom: 8,
   },
   promptPrimary: {
     backgroundColor: "#5B67F1",
@@ -807,6 +818,7 @@ const styles = StyleSheet.create({
   promptPrimaryText: {
     color: "#fff",
     fontWeight: "600",
+    textAlign: "center",
   },
   promptSecondaryText: {
     color: "#5B67F1",

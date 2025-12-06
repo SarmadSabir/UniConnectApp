@@ -133,6 +133,7 @@ export default function ChatListScreen() {
       groupId: item.group._id,
       chatroomId: item.chatroom._id,
       members: item.group.members,
+      eventName: getEventName(item.group),
     });
   };
 
@@ -180,7 +181,7 @@ export default function ChatListScreen() {
         <View style={styles.emptyState}>
           <Text style={styles.emptyTitle}>No chats yet</Text>
           <Text style={styles.emptySubtitle}>
-            Join an event and we’ll drop your matches here.
+            Join an event and we'll drop your matches here.
           </Text>
         </View>
       ) : (
@@ -278,11 +279,11 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: "700",
-    color: "#10194E",
+    color: "#FFFFFF",
     marginBottom: 8,
   },
   emptySubtitle: {
-    color: "#4E5876",
+    color: "rgba(255,255,255,0.85)",
     textAlign: "center",
     paddingHorizontal: 24,
   },
